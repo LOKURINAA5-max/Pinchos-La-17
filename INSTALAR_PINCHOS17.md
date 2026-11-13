@@ -61,3 +61,7 @@ Después del primer ingreso **borra `ADMIN_CLAVE`** en Render.
 - `impresion/iniciar-agente.bat` lo deja corriendo y lo reinicia solo. Guía completa: `impresion/LEEME.md`.
 - Desde el navegador: selector de papel 80 / 58 mm.
 - Solo cambian archivos; no hay migración de base de datos.
+
+## Reutilizar el proyecto de Neon de Fercho (en vez de crear uno nuevo)
+Usa `db/convertir-a-pinchos17.sql`: borra todos los datos de Fercho (carta, usuarios, pedidos, facturas, inventario)
+y deja la base lista para Pinchos la 17. Las instrucciones y el orden de los pasos están al inicio del archivo.
