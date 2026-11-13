@@ -1,0 +1,12 @@
+{
+  "servidor": "https://TU-SITIO.onrender.com",
+  "usuario": "impresora",
+  "clave": "LA-CLAVE-DE-ESE-USUARIO",
+  "cada_segundos": 3,
+  "tildes": false,
+  "pitar": true,
+  "impresoras": {
+    "Asador": { "tipo": "red", "host": "192.168.1.50", "port": 9100, "papel": 80 },
+    "Cocina": { "tipo": "usb", "nombre": "COCINA", "papel": 80 }
+  }
+}
