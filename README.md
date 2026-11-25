@@ -1,212 +1,110 @@
-# Pinchos la 17 — Sistema web de pedidos, caja, cocina, inventario y contabilidad
+> **Pinchos la 17:** lee primero `INSTALAR_PINCHOS17.md`.
 
-> Proyecto de la asignatura **Motores de Bases de Datos** · Unidades Tecnológicas de Santander (UTS)
-> **Integrantes:** Juan Felipe Méndez Sarmiento · Jorge Eliecer Sánchez Jiménez
+> **Versión 8:** lee `NOVEDADES_V8.md` (zonas de cocina, facturas, inversión, nuevo diseño y cómo actualizar).
 
-## 🔗 Aplicativo en funcionamiento
+# Pinchos la 17 · Sistema de pedidos, caja, cocina y contabilidad
 
-**https://pinchos17.onrender.com**
+Sistema web para el restaurante **Pinchos la 17**: los clientes piden desde el celular escaneando un QR
+(en mesa o a domicilio), caja cobra en pesos colombianos con cálculo de vueltos, la cocina ve los pedidos con cronómetro,
+y el administrador controla inventario, contabilidad (diaria, mensual y anual) y un recomendador anti-desperdicio.
 
-| Para probar | Cómo entrar |
-|---|---|
-| **Cliente** (pedir como si estuviera en el local) | Abrir el enlace. Para simular una mesa: `https://pinchos17.onrender.com/?mesa=5` |
-| **Caja, cocina y administrador** | Botón **«Personal»** (arriba a la derecha) → usuario y contraseña. Las credenciales de prueba se entregan **por correo a la docente**, no se publican aquí. |
+**Tecnologías:** Node.js 22 + Express (servidor) · PostgreSQL (base de datos) · HTML/CSS/JavaScript (interfaz) · desplegado con
+**GitHub + Render (servidor) + Neon (base de datos)**.
 
-> ⏱️ El servidor está en el plan gratuito de Render: si nadie lo ha usado en los últimos 15 minutos, **la primera carga tarda unos 50 segundos** mientras se enciende. Después funciona normal.
->
-> Los pedidos de clientes solo se aceptan con la **caja abierta** (Caja → *Abrir caja*). Si el menú dice «cerrado», es por eso.
-
----
-
-## 📋 Descripción
-
-**Pinchos la 17** es un restaurante de pinchos, carnes y bebidas ubicado en la Calle 17 # 25-78 de Bucaramanga. Este sistema reemplaza
-la libreta y la calculadora: el cliente pide desde su celular, caja cobra, la cocina ve qué preparar y el dueño controla
-inventario, costos y ganancias. Todo funciona en el navegador (celular, tablet o PC); no hay que instalar nada.
-
-El núcleo del proyecto es una **base de datos PostgreSQL de 27 tablas y 45 claves foráneas** con reglas de negocio aplicadas
-en la propia base: restricciones `CHECK`, transacciones con bloqueo de filas (`SELECT … FOR UPDATE`), triggers que impiden
-modificar facturas y turnos cerrados, y migraciones versionadas que se aplican solas al arrancar.
-
-### Funcionalidades por rol
-
-| Rol | Qué hace |
-|---|---|
-| **Cliente** (QR en la mesa o domicilio) | Ve la carta con fotos y categorías, quita ingredientes, elige adicionales, pide en mesa o a domicilio (con mapa y ubicación por GPS o dirección) y sigue el estado de su pedido en vivo. Nunca ve costos ni inventario. |
-| **Caja** (POS) | Abre y cierra la caja con conteo de billetes, confirma pedidos, cobra en efectivo o Nequi con **cálculo de vueltos**, junta varios pedidos en una sola factura, registra retiros e ingresos e imprime recibos. |
-| **Cocina** (por zona: Asador / Cocina) | Ve las tareas de su zona con cronómetro de colores, marca lo preparado y despacha. Las **comandas se imprimen** en impresora térmica por cable USB o WiFi (agente ESC/POS en `impresion/`). |
-| **Administrador** | Carta separada en **platos** (se preparan; costo por receta o manual) y **productos de tienda** (gaseosas, cervezas; costo de compra). Inventario de materias primas y productos con **mínimos y máximos** y **pedido a proveedores** automático, compras, conteos físicos, contabilidad (estado de resultados, márgenes por plato, flujo de caja, CSV), usuarios con verificación en dos pasos y auditoría. |
-
-**Reglas importantes que garantiza la base de datos**
-- El inventario se descuenta **una sola vez**, cuando cocina empieza a preparar, incluyendo la merma: `cantidad ÷ (1 − merma)`.
-- Un pedido tiene 0 o 1 factura; una factura agrupa 1 o más pedidos. Las facturas y los turnos cerrados son **inmutables**.
-- Solo puede haber **un turno de caja abierto** a la vez.
-- Cuando un insumo o producto baja de su mínimo, el administrador recibe una alerta en tiempo real.
-
----
-
-## 🛠️ Tecnologías utilizadas
-
-| Capa | Tecnología |
-|---|---|
-| Base de datos | **PostgreSQL** (en la nube: **Neon**, AWS US-West-2). DDL en `db/schema.sql`, migraciones `db/migracion_*.sql`, DML en `db/dml_pinchos17.sql` |
-| Servidor | **Node.js 22** + **Express 5**, driver `pg` (consultas parametrizadas), API REST en JSON |
-| Tiempo real | Server-Sent Events (SSE) para avisar a caja, cocina y administrador |
-| Interfaz | HTML5, CSS3 y JavaScript sin frameworks; mapas con **Leaflet + OpenStreetMap** |
-| Seguridad | `helmet` (CSP), `bcryptjs`, JWT en cookie `httpOnly`, verificación en dos pasos (TOTP), `express-rate-limit` |
-| Impresión | Agente Node.js con comandos **ESC/POS** (impresoras térmicas USB o en red, puerto 9100) |
-| Despliegue | **GitHub** (código) → **Render** (servidor, Docker) + **Neon** (PostgreSQL administrado) |
-| Diagramas | Mermaid (ER y UML), código fuente en `docs/diagramas/fuentes/` |
-
-Arquitectura cliente-servidor de tres capas:
-
+## Arquitectura
 ```
-Navegador (celular / tablet / PC)  ──HTTPS + JSON──▶  Render: Node.js + Express  ──SQL (SSL)──▶  Neon: PostgreSQL
+Navegador (celular / tablet / PC)  ──HTTP + JSON──▶  Render: Node.js + Express  ──SQL (SSL)──▶  Neon: PostgreSQL
         public/index.html                                  src/server.js                          db/schema.sql
                  ▲                                              │
                  └──────── tiempo real (Server-Sent Events) ────┘
 ```
+Arquitectura cliente-servidor de tres capas (presentación, lógica de negocio por API REST y datos). El servidor es la única
+pieza que habla con la base de datos.
 
----
+## Modelo entidad-relación
+![Modelo entidad-relación](docs/modelo-er.png)
 
-## 💻 Instrucciones de ejecución local
+Código fuente editable del diagrama: `docs/modelo-er.mmd` (Mermaid).
 
-**Requisitos:** [Node.js](https://nodejs.org) 20.6 o superior (recomendado 22) y [PostgreSQL](https://www.postgresql.org/download/) 13 o superior.
+## Funciones principales
+- **Cliente (QR):** menú con categorías y buscador, "quitar ingredientes", pedido en mesa o domicilio, seguimiento en vivo. Pago en efectivo o Nequi.
+- **Caja (POS):** confirmar pedidos, cobro con billetes (2.000 a 100.000), **vueltos calculados** con su desglose, recibo, retiros e ingresos, apertura y cierre de caja con conteo por denominación.
+- **Cocina (KDS):** columnas *en espera* / *en preparación*, cronómetro por pedido (verde, amarillo, rojo), casilla por plato, varios pedidos a la vez.
+- **Numeración por jornada:** los pedidos vuelven a empezar en #1 en cada turno de caja; la contabilidad cuenta todos.
+- **Administrador:** contabilidad con estado de resultados, ventas por hora/día/mes/año, gastos, márgenes por plato, CSV para el contador, inventario con fotos y costos, recetas, usuarios con verificación en dos pasos y alertas en tiempo real.
 
+## Ejecutar en tu computador
+Requisitos: Node 20.6+ (recomendado 22) y PostgreSQL 13+.
 ```bash
-# 1. Descargar el proyecto
-git clone https://github.com/LOKURINAA5-max/Pinchos-La-17.git
-cd <nombre-del-repositorio>
-
-# 2. Instalar dependencias
 npm install
-
-# 3. Crear la base de datos vacía (o desde pgAdmin: Create → Database → pinchos17)
-createdb -U postgres pinchos17
-
-# 4. Configurar las variables de entorno
-cp .env.example .env          # en Windows: copy .env.example .env
+cp .env.example .env     # edita DATABASE_URL, JWT_SECRET, ADMIN_USUARIO y ADMIN_CLAVE
+createdb pinchos17          # o crea la base vacía "pinchos17" desde pgAdmin
+npm start                # http://localhost:3000
 ```
+Con la base vacía, el sistema crea **solo** las tablas, el menú de ejemplo y el primer administrador al arrancar.
 
-Abrir `.env` y completar como mínimo:
+## Desplegar con GitHub + Render + Neon
+Guía paso a paso: **[`DESPLIEGUE_NEON_RENDER.md`](DESPLIEGUE_NEON_RENDER.md)**. Este repositorio incluye `render.yaml`, que crea el servicio en Render casi sin configuración.
+Otras guías: `DESPLIEGUE_PRODUCCION.md` (alta disponibilidad, copias, plan B) y `DESPLIEGUE.md` (servidor propio con Docker).
 
-```ini
-DATABASE_URL=postgres://postgres:TU_CLAVE_DE_POSTGRES@localhost:5432/pinchos17
-JWT_SECRET=<48 caracteres aleatorios>    # generarlo con: node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
-ADMIN_USUARIO=admin
-ADMIN_CLAVE=<mínimo 10 caracteres, con letras y números>
-CARGAR_CATALOGO_EJEMPLO=false
-```
-
-```bash
-# 5. Arrancar
-npm start
-```
-
-Abrir **http://localhost:3000**. En el primer arranque el sistema crea **solo** todas las tablas, aplica las migraciones y crea
-el administrador de `.env`. Luego:
-
-1. **Personal** → entrar con `ADMIN_USUARIO` / `ADMIN_CLAVE`.
-2. **Carta → «Cargar la carta de Pinchos la 17»** (75 platos y productos).
-3. **Caja → Abrir caja**, y ya se puede pedir como cliente en otra pestaña (`http://localhost:3000/?mesa=1`).
-
-Otros comandos útiles:
-
-| Comando | Para qué |
+## Roles
+| Rol | Puede |
 |---|---|
-| `npm run dev` | Arranca y se reinicia solo al cambiar el código |
-| `node --env-file=.env scripts/crear-usuario.js cajero1 "Clave12345" caja` | Crear usuarios (`admin`, `caja` o `cocina`) |
-| `psql -U postgres -d pinchos17 -f db/dml_pinchos17.sql` | Ejecutar los ejemplos de DML del informe (después de cargar la carta; agrega datos de demostración) |
-| `node impresion/agente.mjs --prueba` | Probar la impresora de comandas (ver `impresion/LEEME.md`) |
+| público (cliente por QR) | ver menú, crear pedido en mesa o domicilio (con la caja abierta), ver el estado de su pedido |
+| cocina | ver la cola, pasar pedidos a *preparación* y *listo*, marcar platos |
+| caja | flujo de pedidos, cobrar, abrir/cerrar caja, retiros, pedidos de mostrador |
+| admin | todo lo anterior + inventario, menú, usuarios, contabilidad y reportes |
 
-> Con Docker: `docker compose up` levanta PostgreSQL y el servidor juntos (ver `DESPLIEGUE.md`).
-
----
-
-## 🗂️ Modelo entidad-relación
-
-27 tablas y 45 claves foráneas, agrupadas en 5 módulos. Las imágenes se generan desde la base real (cada línea es una clave foránea existente).
-
-![Modelo entidad-relación — vista general](docs/diagramas/er/general.png)
-
-<details>
-<summary><b>Ver el modelo por módulos</b> (ventas, cocina, carta, inventario, control)</summary>
-
-### Ventas y caja
-![ER ventas](docs/diagramas/er/ventas.png)
-
-### Cocina
-![ER cocina](docs/diagramas/er/cocina.png)
-
-### Carta, opciones y promociones
-![ER carta](docs/diagramas/er/carta.png)
-
-### Inventario
-![ER inventario](docs/diagramas/er/inventario.png)
-
-### Seguridad y control
-![ER control](docs/diagramas/er/control.png)
-
-</details>
-
-## 📐 Diagramas UML
-
-### Casos de uso
-| Cliente | Caja | Cocina, administrador e impresora |
+## Rutas principales de la API
+| Ruta | Rol | Descripción |
 |---|---|---|
-| ![Casos de uso cliente](docs/diagramas/uml/uc_cliente.png) | ![Casos de uso caja](docs/diagramas/uml/uc_caja.png) | ![Casos de uso cocina y administrador](docs/diagramas/uml/uc_cocina.png) |
+| `POST /api/login` · `/api/logout` · `GET /api/yo` | público / sesión | inicio de sesión con cookie segura (y 2FA) |
+| `GET /api/menu` · `GET /api/config` | público | menú con categorías; estado del local y tiempos de cocina |
+| `POST /api/pedidos` · `GET /api/pedidos/:id/estado` | público | crear pedido (el total lo calcula el servidor) y seguirlo |
+| `GET /api/pedidos` · `PATCH /api/pedidos/:id/{confirmar,avanzar,cancelar}` | cocina, caja, admin | cola activa y cambios de estado |
+| `PATCH /api/pedidos/:id/pagar` | caja, admin | cobro con dinero recibido y vueltos |
+| `POST /api/turno/{abrir,cerrar,movimiento}` · `GET /api/turno` | caja, admin | turnos de caja |
+| `GET /api/contabilidad/{resumen,serie,margenes,exportar.csv}` | admin | contabilidad |
+| `GET/POST /api/gastos` · `PATCH /api/gastos/:id/anular` | admin | gastos del negocio |
+| `GET/POST/PUT/DELETE /api/insumos` · `/api/platos` | admin | inventario y menú (fotos máx. 300 KB, guardadas en la base) |
+| `GET /api/reportes/{platos,consumo,recomendaciones}` | admin | más vendidos, consumo, stock sugerido |
+| `GET /api/eventos` (SSE) · `GET /api/salud` | público | tiempo real y monitoreo |
 
-### Clases
-![Clases — ventas y caja](docs/diagramas/uml/clases1.png)
-![Clases — carta y cocina](docs/diagramas/uml/clases2.png)
-![Clases — inventario y control](docs/diagramas/uml/clases3.png)
+Estados: `espera → preparacion → listo → (entregando, solo domicilio) → entregado` (o `cancelado`).
 
-<details>
-<summary><b>Ver estados, secuencia y despliegue</b></summary>
+## Recomendador anti-desperdicio
+La vista `recomendacion_stock` calcula el consumo promedio diario de los últimos 14 días y sugiere mantener ese
+promedio + 15 %. Marca `reponer` si quedan menos de 2 días de stock y `exceso` si hay más de 10 días.
 
-### Estados de un pedido
-![Estados del pedido](docs/diagramas/uml/estados.png)
+## Seguridad
+- **Sesión:** cookie `httpOnly` + `SameSite=Strict` (el navegador no entrega el token a ningún script) y protección CSRF con cabecera obligatoria. En `NODE_ENV=production` la cookie es `Secure` y se exige HTTPS; por eso en producción necesitas HTTPS de verdad.
+- **Verificación en dos pasos (TOTP):** compatible con Google/Microsoft Authenticator. Es **opcional por defecto**: cada usuario la activa (🔐) o desactiva (🔓, con contraseña + código) cuando quiera. Con `EXIGIR_2FA=admin` el administrador debe activarla al entrar. Incluye 8 códigos de recuperación de un solo uso, y un mismo código no sirve dos veces. El administrador puede restablecerla a otro usuario.
+- **Contraseñas:** bcrypt, mínimo 10 caracteres con letras y números; bloqueo de 15 min tras 5 fallos; límite de intentos por IP.
+- **Accesos:** historial de inicios de sesión (exitosos y fallidos) y aviso en tiempo real al administrador ante cuenta bloqueada o ingreso desde red/dispositivo nuevos.
+- **Base de datos:** `scripts/crear-usuario-bd.js` crea un usuario con permisos mínimos (no puede borrar tablas, ni borrar/editar la auditoría, ni crear usuarios). Los turnos cerrados y la auditoría están protegidos incluso contra el administrador de la base.
+- **Pedidos de clientes:** con `CONFIRMAR_PEDIDOS=true` (por defecto) un pedido hecho por QR o domicilio espera a que caja lo confirme antes de llegar a cocina. Evita pedidos falsos desde fuera del local.
+- **Otros:** cabeceras `helmet`/CSP, consultas parametrizadas, validación de datos y fotos, precios calculados en el servidor, tiempo máximo de consulta (15 s), registro de accesos sin datos sensibles, cierre de sesión por inactividad (30 min en caja y admin), cierre ordenado del servidor y `/api/salud` para monitoreo.
+- Nunca subas el archivo `.env` a GitHub (ya está en `.gitignore`).
 
-### Secuencia: del pedido al cobro
-![Secuencia](docs/diagramas/uml/secuencia.png)
+## Caja: apertura, cierre y seguridad (turnos)
+- **Apertura:** caja indica con cuánto efectivo empieza. Sin una caja abierta no se puede cobrar. Solo puede haber **un turno abierto** a la vez (lo garantiza la base de datos).
+- **Aviso al administrador:** en tiempo real aparece un banner en su pantalla, con sonido (apertura, cierre, retiros, diferencias y turnos demasiado largos). El canal en vivo solo avisa que hubo un cambio; los datos se piden con sesión, así que no se filtran.
+- **Retiros e ingresos de efectivo:** con motivo obligatorio. Un retiro mayor a `CAJA_UMBRAL_RETIRO` se marca como alerta.
+- **Cierre a ciegas:** el cajero cuenta y escribe el efectivo; el sistema calcula lo esperado (base + ventas en efectivo + ingresos − retiros) y muestra la diferencia. El cajero no ve el "esperado" antes de contar. Si la diferencia supera `CAJA_UMBRAL_DIFERENCIA`, el admin recibe una alerta en rojo.
+- **No se cierra con deudas:** si hay pedidos entregados sin cobrar, el cierre se bloquea.
+- **Inmutable:** un turno cerrado y la bitácora de auditoría (usuario, hora, IP y dispositivo) no se pueden editar ni borrar, ni siquiera desde la base de datos.
+- **Admin:** pestaña "Turnos" con el turno en vivo, historial de cierres con diferencias y eventos recientes.
+- Cada venta queda asociada al turno donde se cobró; así el cierre no depende de la hora del reloj ni de la medianoche.
 
-### Despliegue
-![Despliegue](docs/diagramas/uml/despliegue.png)
-
-</details>
-
-## 📄 Documentación
-
-| Documento | Contenido |
-|---|---|
-| [`docs/Pinchos17_BD_ER_UML_DML_Riesgos.pdf`](docs/Pinchos17_BD_ER_UML_DML_Riesgos.pdf) | Informe completo: modelo ER, diccionario de tablas, diagramas UML, 33 bloques de DML con su resultado y matriz de riesgos (14 riesgos) |
-| [`db/schema.sql`](db/schema.sql) | DDL: creación de tablas, restricciones, índices, vistas y triggers |
-| [`db/dml_pinchos17.sql`](db/dml_pinchos17.sql) | DML: `INSERT`, `UPDATE`, `DELETE`, `SELECT` con `JOIN`, agregaciones y transacciones |
-| [`INSTALAR_PINCHOS17.md`](INSTALAR_PINCHOS17.md) | Instalación y novedades de cada versión |
-| [`DESPLIEGUE_NEON_RENDER.md`](DESPLIEGUE_NEON_RENDER.md) | Publicar el sistema con GitHub + Render + Neon |
-| [`impresion/LEEME.md`](impresion/LEEME.md) | Conectar la impresora de comandas (USB o WiFi) |
-
-## 📁 Estructura del repositorio
-
+## Estructura del repositorio
 ```
-src/
-  server.js          servidor Express: rutas de la API y reglas de negocio
-  arranque.js        crea las tablas, aplica migraciones y el primer administrador
-  cocina.js          comandas, descuento de inventario, costos y alertas de stock
-  v8.js              facturas, compras, ajustes, carga de la carta
-  geocodificar.js    búsqueda de direcciones para domicilios (Bucaramanga y área metropolitana)
-  menu-carta.js      carta de Pinchos la 17
-public/              interfaz web (index.html, css/, js/ por rol, vendor/leaflet)
-db/                  schema.sql (DDL), migraciones, dml_pinchos17.sql (DML), seed
-docs/                informe PDF, diagramas ER y UML (PNG + fuentes Mermaid)
-impresion/           agente de impresión de comandas ESC/POS
-scripts/             crear usuarios, copias de seguridad, migrar, limpiar pruebas
-render.yaml · Dockerfile · docker-compose.yml   despliegue
+src/server.js        servidor Express (rutas, reglas de negocio)
+src/arranque.js      crea tablas, migraciones y primer administrador al arrancar
+src/conexion.js      ajusta la conexión a Neon (usa siempre la dirección directa)
+src/totp.js          verificación en dos pasos
+public/index.html    interfaz web (cliente, caja, cocina, administrador)
+db/                  schema.sql, seed.sql y migraciones
+scripts/             crear usuarios, copias de seguridad, limpieza de pruebas
+docs/                diagrama entidad-relación
+render.yaml          despliegue en Render
 ```
-
-## 🔒 Seguridad
-
-- El archivo `.env` (cadena de conexión, `JWT_SECRET`, contraseñas) **no se sube** al repositorio: está en `.gitignore`. Se publica solo `.env.example`, sin valores.
-- Contraseñas con bcrypt, bloqueo tras 5 intentos fallidos, verificación en dos pasos opcional, sesión en cookie `httpOnly`.
-- Todas las consultas son parametrizadas (sin inyección SQL) y los precios los calcula el servidor, no el navegador.
-- La conexión a Neon es cifrada (SSL). Las credenciales de prueba del aplicativo se comparten por un canal privado.
