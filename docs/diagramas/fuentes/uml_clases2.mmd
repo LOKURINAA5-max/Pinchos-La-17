@@ -1,0 +1,121 @@
+---
+config:
+  theme: base
+  themeVariables:
+    fontFamily: Arial
+    fontSize: 16px
+    primaryColor: "#fff2e3"
+    primaryBorderColor: "#c25a00"
+    lineColor: "#444"
+  htmlLabels: false
+  themeCSS: "g.edgeTerminals text, .edgeTerminals text tspan { font-size: 15px !important; font-weight: bold; fill: #8c1d12 !important; }"
+  class:
+    hideEmptyMembersBox: true
+---
+classDiagram
+  direction LR
+  class Plato {
+    +int id
+    +String nombre
+    +decimal precio
+    +String categoria
+    +TipoItem tipo
+    +decimal costoFijo
+    +boolean agotado
+    +boolean esPromo
+    +DateTime promoDesde
+    +DateTime promoHasta
+    +int[] dias
+    +disponibleHoy() boolean
+    +precioCon(opciones) decimal
+    +marcarAgotado(valor)
+  }
+  class OpcionGrupo {
+    +int id
+    +String nombre
+    +boolean obligatorio
+    +boolean multiple
+    +validar(elegidas)
+  }
+  class Opcion {
+    +int id
+    +String nombre
+    +decimal precioExtra
+  }
+  class PlatoCombo {
+    +int cantidad
+  }
+  class PlatoZona {
+    +String parte
+  }
+  class Zona {
+    +int id
+    +String nombre
+    +String color
+    +boolean activa
+    +tareasPendientes() PedidoTarea[]
+  }
+  class PedidoTarea {
+    +long id
+    +String nombre
+    +int cantidad
+    +EstadoTarea estado
+    +DateTime inicioEn
+    +DateTime listoEn
+    +empezar()
+    +marcarLista()
+    +reabrir()
+  }
+  class Impresion {
+    +long id
+    +TipoComanda tipo
+    +JSON contenido
+    +EstadoImpresion estado
+    +tomar(estacion)
+    +marcarImpresa()
+    +reimprimir()
+  }
+  class Anuncio {
+    +int id
+    +String titulo
+    +String foto
+    +boolean activo
+  }
+  class Pedido {
+    +UUID id
+    +int numeroDia
+  }
+  class PedidoItem {
+    +int id
+    +int cantidad
+  }
+  class EstadoTarea { <<enumeration>>
+    espera
+    preparando
+    lista }
+  Plato "1" *-- "0..*" OpcionGrupo : ofrece
+  OpcionGrupo "1" *-- "1..*" Opcion : agrupa
+  Plato "1" -- "0..*" PlatoCombo : promo contiene
+  PlatoCombo "0..*" -- "1" Plato : incluido
+  Plato "1" -- "0..*" PlatoZona
+  PlatoZona "0..*" -- "1" Zona : se prepara en
+  Opcion "0..*" --> "0..1" Zona : la prepara
+  Anuncio "0..*" --> "0..1" Plato : promociona
+  Pedido "1" *-- "1..*" PedidoItem
+  Pedido "1" *-- "0..*" PedidoTarea : se divide en
+  PedidoItem "0..1" -- "0..*" PedidoTarea : genera
+  Zona "1" -- "0..*" PedidoTarea : prepara
+  Pedido "1" -- "0..*" Impresion : se imprime
+  Zona "1" -- "0..*" Impresion : recibe
+  PedidoTarea ..> EstadoTarea
+  style Plato fill:#fff2b3,stroke:#a67c00,stroke-width:2px
+  style OpcionGrupo fill:#fff2b3,stroke:#a67c00,stroke-width:2px
+  style Opcion fill:#fff2b3,stroke:#a67c00,stroke-width:2px
+  style PlatoCombo fill:#fff2b3,stroke:#a67c00
+  style Anuncio fill:#fff2b3,stroke:#a67c00
+  style PlatoZona fill:#ffd0cc,stroke:#b3261e
+  style Zona fill:#ffd0cc,stroke:#b3261e,stroke-width:2px
+  style PedidoTarea fill:#ffd0cc,stroke:#b3261e,stroke-width:2px
+  style Impresion fill:#ffd0cc,stroke:#b3261e
+  style Pedido fill:#eeeeee,stroke:#999
+  style PedidoItem fill:#eeeeee,stroke:#999

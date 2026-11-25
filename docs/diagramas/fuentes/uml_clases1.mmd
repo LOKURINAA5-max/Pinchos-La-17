@@ -1,0 +1,135 @@
+---
+config:
+  theme: base
+  themeVariables:
+    fontFamily: Arial
+    fontSize: 16px
+    primaryColor: "#fff2e3"
+    primaryBorderColor: "#c25a00"
+    lineColor: "#444"
+  htmlLabels: false
+  themeCSS: "g.edgeTerminals text, .edgeTerminals text tspan { font-size: 15px !important; font-weight: bold; fill: #8c1d12 !important; }"
+  class:
+    hideEmptyMembersBox: true
+---
+classDiagram
+  direction LR
+  class Usuario {
+    +int id
+    +String usuario
+    +Rol rol
+    +boolean activo
+    +boolean totpActivo
+    +iniciarSesion(clave, codigo2FA)
+    +cambiarClave(actual, nueva)
+    +activar2FA(codigo)
+  }
+  class TurnoCaja {
+    +int id
+    +decimal montoApertura
+    +DateTime abiertoEn
+    +DateTime cerradoEn
+    +decimal efectivoEsperado
+    +decimal efectivoContado
+    +decimal diferencia
+    +abrir(base)
+    +registrarMovimiento(tipo, monto, motivo)
+    +cerrar(efectivoContado) ResumenCierre
+  }
+  class MovimientoCaja {
+    +int id
+    +TipoMovimiento tipo
+    +decimal monto
+    +String motivo
+  }
+  class Gasto {
+    +int id
+    +Date fecha
+    +String categoria
+    +decimal monto
+    +boolean anulado
+    +anular()
+  }
+  class Pedido {
+    +UUID id
+    +int numeroDia
+    +TipoPedido tipo
+    +EstadoPedido estado
+    +String mesa
+    +String direccion
+    +decimal total
+    +decimal costoDomicilio
+    +MetodoPago metodoPago
+    +boolean confirmado
+    +boolean pagado
+    +boolean inventarioDescontado
+    +crear(items) Pedido
+    +confirmar()
+    +corregirItems(items)
+    +agregarComplemento(items) Pedido
+    +entregar()
+    +cobrar(recibido, juntarCon) Factura
+    +cancelar(motivo)
+  }
+  class PedidoItem {
+    +int id
+    +String nombre
+    +decimal precioUnit
+    +int cantidad
+    +String[] sin
+    +String nota
+    +Opcion[] opciones
+    +boolean libre
+    +subtotal() decimal
+  }
+  class Factura {
+    +int id
+    +int numero
+    +DateTime creadaEn
+    +decimal total
+    +decimal recibido
+    +decimal vueltos
+    +decimal domicilio
+    +MetodoPago metodoPago
+    +imprimir()
+  }
+  class Plato {
+    +int id
+    +String nombre
+    +decimal precio
+  }
+  class TipoPedido { <<enumeration>>
+    mesa
+    domicilio
+    mostrador }
+  class EstadoPedido { <<enumeration>>
+    espera
+    preparacion
+    listo
+    entregando
+    entregado
+    cancelado }
+  class MetodoPago { <<enumeration>>
+    efectivo
+    nequi }
+  class Rol { <<enumeration>>
+    admin
+    caja
+    cocina }
+  Pedido "1" *-- "1..*" PedidoItem : contiene
+  Factura "0..1" -- "1..*" Pedido : se cobra en
+  PedidoItem "0..*" --> "0..1" Plato : se pide como
+  TurnoCaja "0..1" -- "0..*" Pedido : cobrado en
+  TurnoCaja "0..1" -- "0..*" Factura : emitida en
+  TurnoCaja "1" *-- "0..*" MovimientoCaja : registra
+  Gasto "0..1" -- "0..*" MovimientoCaja : origina
+  TurnoCaja "0..1" -- "0..*" Gasto : pagado en
+  Usuario "1" -- "0..*" TurnoCaja : abre
+  Usuario "0..1" -- "0..*" Factura : emite
+  Pedido ..> TipoPedido
+  Pedido ..> EstadoPedido
+  Pedido ..> MetodoPago
+  Usuario ..> Rol
+  style Pedido fill:#ffe1c2,stroke:#c25a00,stroke-width:2px
+  style Factura fill:#ffe1c2,stroke:#c25a00,stroke-width:2px
+  style Plato fill:#eeeeee,stroke:#999

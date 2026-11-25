@@ -1,0 +1,37 @@
+---
+config:
+  theme: base
+  themeVariables:
+    fontFamily: Arial
+    fontSize: 17px
+    primaryColor: "#fff2e3"
+    primaryBorderColor: "#c25a00"
+    lineColor: "#555"
+    edgeLabelBackground: "#ffffff"
+---
+flowchart LR
+  CLI["🧑 Cliente"]
+  subgraph S["Sistema Pinchos la 17"]
+    U1(["Escanear QR de la mesa"])
+    U2(["Ver la carta, promociones<br/>y banners"])
+    U3(["Hacer pedido<br/>(mesa o domicilio)"])
+    U6(["Seguir el estado del pedido"])
+    U7(["Corregir pedido<br/>(antes de que lo confirmen)"])
+    U8(["Pedir algo más<br/>(complemento)"])
+    U4(["Elegir opciones del plato<br/>(adicionales, sabor)"])
+    U5(["Buscar dirección y<br/>confirmarla en el mapa"])
+    U9(["Calcular valor del domicilio"])
+  end
+  CLI --- U1
+  CLI --- U2
+  CLI --- U3
+  CLI --- U6
+  CLI --- U7
+  CLI --- U8
+  U3 -. "«include»" .-> U4
+  U5 -. "«extend»<br/>si es domicilio" .-> U3
+  U3 -. "«include»<br/>si es domicilio" .-> U9
+  U8 -. "«include»" .-> U4
+  classDef act fill:#2a1f17,color:#fff,stroke:#2a1f17,font-weight:bold,font-size:20px
+  class CLI act
+  style S fill:#fffaf4,stroke:#c25a00,stroke-width:2px

@@ -1,0 +1,49 @@
+---
+config:
+  theme: base
+  themeVariables:
+    fontFamily: Arial
+    fontSize: 17px
+    primaryColor: "#fff2e3"
+    primaryBorderColor: "#c25a00"
+    lineColor: "#555"
+    edgeLabelBackground: "#ffffff"
+---
+flowchart LR
+  CAJ["🧑‍💼 Cajero"]
+  ADM["🧑‍💻 Administrador"]
+  subgraph S["Sistema Pinchos la 17"]
+    C1(["Abrir caja con base"])
+    C12(["Cerrar caja con conteo<br/>(por billetes o total)"])
+    C2(["Confirmar pedido del cliente"])
+    C3(["Tomar pedido en<br/>punto de venta"])
+    C4(["Cobrar pedido<br/>(efectivo o Nequi)"])
+    C8(["Entregar pedido"])
+    C9(["Registrar ingreso<br/>o retiro de efectivo"])
+    C10(["Buscar y reimprimir factura"])
+    C11(["Cancelar pedido<br/>(antes de cocina)"])
+    C5(["Juntar cuentas"])
+    C6(["Generar factura"])
+    C7(["Agregar otro cobro<br/>(bolsa, envase)"])
+    C13(["Calcular vueltos"])
+    C14(["Avisar al administrador"])
+  end
+  CAJ --- C1
+  CAJ --- C12
+  CAJ --- C2
+  CAJ --- C3
+  CAJ --- C4
+  CAJ --- C8
+  CAJ --- C9
+  CAJ --- C10
+  CAJ --- C11
+  ADM == "generalización:<br/>también hace todo<br/>lo del cajero" ==> CAJ
+  C4 -. "«include»" .-> C6
+  C4 -. "«include»<br/>si es efectivo" .-> C13
+  C5 -. "«extend»" .-> C4
+  C7 -. "«extend»" .-> C3
+  C9 -. "«include»" .-> C14
+  C12 -. "«include»" .-> C14
+  classDef act fill:#2a1f17,color:#fff,stroke:#2a1f17,font-weight:bold
+  class CAJ,ADM act
+  style S fill:#fffaf4,stroke:#c25a00,stroke-width:2px

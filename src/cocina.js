@@ -66,7 +66,30 @@ export async function insertarItems(c, pedidoId, lines, byId) {
     await c.query(`INSERT INTO pedido_items (pedido_id, plato_id, nombre, precio_unit, cantidad, sin, nota, opciones, libre) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
       [pedidoId, l.libre ? null : pl.id, l.nombre ?? pl.nombre, l.precio ?? pl.precio, l.cantidad, l.sin, l.nota || null, JSON.stringify(l.ops || []), !!l.libre]);
   }
+  await fijarCostos(c, pedidoId);
   return lines.reduce((a, l) => a + Number(l.precio ?? byId.get(l.plato_id).precio) * l.cantidad, 0);
+}
+
+/* ---------- Costo de lo vendido: por receta o fijo ----------
+   · Producto (tipo 'producto': gaseosas, cervezas…): su costo es el costo de compra que puso el dueño (platos.costo_fijo).
+   · Plato: su costo sale de la receta (insumos × costo, con merma). Si en Ajustes «costo_platos» = 'manual' y el plato
+     tiene costo de producción escrito, se usa ese en vez de la receta.
+   · Una promoción con componentes cuesta lo que cuestan sus componentes, cada uno con su regla.
+   · Los adicionales (opciones) siempre cuestan por su receta.
+   El costo fijo se copia en pedido_items.costo_fijo; el inventario se sigue descontando igual (para las existencias),
+   pero esas salidas se marcan costo_aparte para no contar el costo dos veces. */
+export const modoCosto = async (c) => ((await ajuste(c, 'costo_platos')) === 'manual' ? 'manual' : 'receta');
+const FIJO = (pl, modo) => `(${pl}.costo_fijo IS NOT NULL AND (${pl}.tipo = 'producto' OR ${modo} = 'manual'))`;
+export async function fijarCostos(c, pedidoId) {
+  const modo = await modoCosto(c);
+  await c.query(`
+    UPDATE pedido_items it SET costo_fijo = x.costo
+    FROM (SELECT it.id, sum(CASE WHEN ${FIJO('pl', '$2')} THEN pl.costo_fijo * coalesce(cb.cantidad, 1) END) AS costo
+          FROM pedido_items it LEFT JOIN plato_combo cb ON cb.promo_id = it.plato_id
+          JOIN platos pl ON pl.id = coalesce(cb.plato_id, it.plato_id)
+          WHERE it.pedido_id = $1 GROUP BY it.id) x
+    WHERE it.id = x.id AND it.costo_fijo IS DISTINCT FROM x.costo`, [pedidoId, modo]);
+  return modo;
 }
 
 export async function bloquear(c, id) {
@@ -77,30 +100,58 @@ export async function bloquear(c, id) {
 
 // Descuenta del inventario lo que consume el pedido (promociones: según los platos que las componen; con merma)
 export async function descontarInventario(c, pedidoId, usuarioId) {
+  const modo = await fijarCostos(c, pedidoId);
   const { rows } = await c.query(`
     WITH exp AS (
-      SELECT coalesce(cb.plato_id, it.plato_id) AS plato_id, it.cantidad * coalesce(cb.cantidad, 1) AS qty, it.sin
-      FROM pedido_items it LEFT JOIN plato_combo cb ON cb.promo_id = it.plato_id WHERE it.pedido_id = $1)
-    SELECT r.insumo_id, round(sum(r.cantidad * e.qty / (1 - s.merma_pct / 100.0)), 2) AS qty
+      SELECT coalesce(cb.plato_id, it.plato_id) AS plato_id, it.cantidad * coalesce(cb.cantidad, 1) AS qty, it.sin, ${FIJO('pl', '$2')} AS fijo
+      FROM pedido_items it LEFT JOIN plato_combo cb ON cb.promo_id = it.plato_id
+      JOIN platos pl ON pl.id = coalesce(cb.plato_id, it.plato_id) WHERE it.pedido_id = $1)
+    SELECT r.insumo_id, e.fijo, round(sum(r.cantidad * e.qty / (1 - s.merma_pct / 100.0)), 2) AS qty
     FROM exp e JOIN recetas r ON r.plato_id = e.plato_id JOIN insumos s ON s.id = r.insumo_id
-    WHERE NOT (s.nombre = ANY(e.sin)) GROUP BY r.insumo_id`, [pedidoId]);
+    WHERE NOT (s.nombre = ANY(e.sin)) GROUP BY r.insumo_id, e.fijo`, [pedidoId, modo]);
   // Lo que gastan las opciones elegidas (ej.: papas a la francesa de un pincho)
   const { rows: extra } = await c.query(`
     SELECT r.insumo_id, round(sum(r.cantidad * it.cantidad / (1 - s.merma_pct / 100.0)), 2) AS qty
     FROM pedido_items it CROSS JOIN LATERAL jsonb_array_elements(it.opciones) o
     JOIN opcion_receta r ON r.opcion_id = (o->>'id')::int JOIN insumos s ON s.id = r.insumo_id
     WHERE it.pedido_id = $1 GROUP BY r.insumo_id`, [pedidoId]);
-  for (const x of extra) {
-    const r = rows.find((y) => y.insumo_id === x.insumo_id);
-    if (r) r.qty = Math.round((Number(r.qty) + Number(x.qty)) * 100) / 100; else rows.push(x);
+  for (const x of extra) {   // los adicionales siempre cuestan por su receta
+    const r = rows.find((y) => y.insumo_id === x.insumo_id && !y.fijo);
+    if (r) r.qty = Math.round((Number(r.qty) + Number(x.qty)) * 100) / 100; else rows.push({ ...x, fijo: false });
   }
   for (const r of rows) {
-    const { rows: [i] } = await c.query('SELECT cantidad FROM insumos WHERE id = $1 FOR UPDATE', [r.insumo_id]);
+    const { rows: [i] } = await c.query('SELECT cantidad, stock_min, nombre, unidad, tipo FROM insumos WHERE id = $1 FOR UPDATE', [r.insumo_id]);
     const real = Math.min(Number(i.cantidad), Number(r.qty));
-    await c.query(`INSERT INTO movimientos_inventario (insumo_id, tipo, cantidad, delta, motivo, pedido_id, usuario_id)
-       VALUES ($1, 'salida', $2, $3, 'Pedido en preparación', $4, $5)`, [r.insumo_id, r.qty, -real, pedidoId, usuarioId]);
+    await avisoMinimo(c, i, Number(i.cantidad) - real);
+    await c.query(`INSERT INTO movimientos_inventario (insumo_id, tipo, cantidad, delta, motivo, pedido_id, usuario_id, costo_aparte)
+       VALUES ($1, 'salida', $2, $3, 'Pedido en preparación', $4, $5, $6)`, [r.insumo_id, r.qty, -real, pedidoId, usuarioId, !!r.fijo]);
     await c.query('UPDATE insumos SET cantidad = GREATEST(cantidad - $2, 0) WHERE id = $1', [r.insumo_id, r.qty]);
   }
+}
+
+// Aviso al administrador cuando una existencia baja hasta su mínimo (una vez, al cruzarlo)
+export async function avisoMinimo(c, i, nueva) {
+  if (i.stock_min == null || !(Number(i.cantidad) > Number(i.stock_min)) || !(nueva <= Number(i.stock_min))) return;
+  await c.query(`INSERT INTO auditoria_caja (turno_id, evento, detalle)
+    VALUES ((SELECT id FROM turnos_caja WHERE cerrado_en IS NULL ORDER BY id DESC LIMIT 1), 'stock_minimo', $1)`,
+    [JSON.stringify({ insumo: i.nombre, quedan: Math.round(nueva * 100) / 100, minimo: Number(i.stock_min), unidad: i.unidad, tipo: i.tipo })]);
+}
+
+// Cada producto de la carta (tipo 'producto') tiene su propia existencia en el inventario y una receta de 1 unidad,
+// así al venderlo baja solo. Se usa al crear o cambiar productos y al cargar la carta.
+export async function asegurarExistencias(c) {
+  await c.query(`UPDATE platos p SET insumo_id = r.insumo_id
+    FROM (SELECT plato_id, min(insumo_id) AS insumo_id FROM recetas GROUP BY plato_id HAVING count(*) = 1) r
+    WHERE p.tipo = 'producto' AND p.insumo_id IS NULL AND r.plato_id = p.id`);
+  await c.query(`WITH nuevos AS (
+      INSERT INTO insumos (codigo, nombre, cantidad, unidad, costo_unitario, tipo)
+      SELECT 'PROD-' || p.id, left(p.nombre, 80), 0, 'u', coalesce(p.costo_fijo, 0), 'producto' FROM platos p
+       WHERE p.tipo = 'producto' AND p.activo AND p.insumo_id IS NULL AND NOT EXISTS (SELECT 1 FROM recetas r WHERE r.plato_id = p.id)
+      ON CONFLICT (codigo) DO NOTHING RETURNING id, codigo)
+    UPDATE platos p SET insumo_id = n.id FROM nuevos n WHERE n.codigo = 'PROD-' || p.id`);
+  await c.query(`INSERT INTO recetas (plato_id, insumo_id, cantidad)
+    SELECT p.id, p.insumo_id, 1 FROM platos p WHERE p.insumo_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM recetas r WHERE r.plato_id = p.id)`);
+  await c.query(`UPDATE insumos i SET tipo = 'producto', activo = TRUE FROM platos p WHERE p.insumo_id = i.id AND p.activo AND p.tipo = 'producto' AND (i.tipo <> 'producto' OR NOT i.activo)`);
 }
 
 // Crea las tareas por zona (una por ítem y zona; las promociones se reparten según sus componentes).

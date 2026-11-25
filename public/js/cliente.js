@@ -80,7 +80,7 @@ function cartMas(){const cs=cats(),q=cartQ.trim().toLowerCase(),sel=cartCat>0?cs
 /* ---------- Domicilio: costo y ubicación ---------- */
 const domFee=t=>{if(!DC||DC.modo==='ninguno')return 0;if(DC.modo==='fija')return DC.fija;return t.dcosto==null?null:t.dcosto};
 /* Enlaces para llevar al domiciliario: Waze (tráfico en vivo) y/o Google Maps, según lo que elija el administrador */
-const dirTxt=p=>{const d=p.direccion||dirCompleta(p);return encodeURIComponent(d+(/floridablanca|gir[oó]n|piedecuesta|bucaramanga/i.test(d)?', Santander, Colombia':', Bucaramanga, Santander, Colombia'))};
+const dirTxt=p=>{const d=(p.direccion||dirCompleta(p)).replace(/,?\s*\b(santander|colombia)\b\.?/gi,'').replace(/[,\s]+$/,'');return encodeURIComponent(d+(/floridablanca|gir[oó]n|piedecuesta|bucaramanga/i.test(d)?', Santander, Colombia':', Bucaramanga, Santander, Colombia'))};
 const conPunto=p=>p.lat!=null&&p.lat!=='';
 const wazeUrl=p=>conPunto(p)?`https://waze.com/ul?ll=${p.lat},${p.lng}&navigate=yes`:`https://waze.com/ul?q=${dirTxt(p)}&navigate=yes`;
 const gmapsUrl=p=>conPunto(p)?`https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lng}`:`https://www.google.com/maps/search/?api=1&query=${dirTxt(p)}`;

@@ -13,6 +13,7 @@ export function montarV8({ app, q, pool, tx, auth, notify, audit, upload, guarda
   const AJ = {
     despacho_activo: 'bool', pantalla_despacho: 'bool', anuncios_barra: 'bool', anuncios_carrusel: 'bool', diario_con_inversion: 'bool', alerta_espera_min: 'min',
     modo_cocina: 'cocina', dom_ubicacion: 'bool', nav_app: 'nav', dom_modo: 'modo', dom_fija: 'plata', dom_base: 'plata', dom_por_km: 'plata', dom_km_incluidos: 'km', dom_km_max: 'km', dom_factor_ruta: 'factor', local_lat: 'coord', local_lng: 'coord',
+    costo_platos: 'costo',
   };
   app.get('/api/ajustes', auth('admin'), async (req, res) => res.json(await K.ajustes(pool)));
   app.put('/api/ajustes', auth('admin'), async (req, res) => {
@@ -32,6 +33,7 @@ export function montarV8({ app, q, pool, tx, auth, notify, audit, upload, guarda
           const { rows: [x] } = await c.query("SELECT count(*)::int AS n FROM pedidos WHERE confirmado AND estado IN ('espera','preparacion')");
           if (x.n > 0 && (await K.ajuste(c, 'modo_cocina')) !== v) throw new HttpError(409, `Hay ${x.n} pedido(s) en cocina. Termínalos antes de cambiar la forma de trabajo`);
         }
+        else if (AJ[k] === 'costo') { if (!['receta', 'manual'].includes(v)) throw bad('Forma de costear inválida: receta o manual'); }
         else if (AJ[k] === 'nav') { if (!['waze', 'google', 'ambas'].includes(v)) throw bad('App de navegación inválida'); }
         else if (AJ[k] === 'modo') {
           if (!['ninguno', 'fija', 'km'].includes(v)) throw bad('Modo de domicilio inválido');
@@ -124,6 +126,8 @@ export function montarV8({ app, q, pool, tx, auth, notify, audit, upload, guarda
     SELECT p.*, coalesce((SELECT json_agg(json_build_object('zona_id', pz.zona_id, 'parte', pz.parte)) FROM plato_zonas pz WHERE pz.plato_id = p.id), '[]') AS zonas,
            coalesce((SELECT json_agg(json_build_object('plato_id', cb.plato_id, 'cantidad', cb.cantidad, 'nombre', x.nombre)) FROM plato_combo cb JOIN platos x ON x.id = cb.plato_id WHERE cb.promo_id = p.id), '[]') AS combo,
            (SELECT count(*)::int FROM recetas r WHERE r.plato_id = p.id) AS n_receta,
+           (SELECT round(coalesce(sum(r.cantidad / (1 - i.merma_pct / 100.0) * i.costo_unitario), 0)) FROM recetas r JOIN insumos i ON i.id = r.insumo_id WHERE r.plato_id = p.id)::bigint AS costo_receta,
+           (SELECT json_build_object('cantidad', i.cantidad, 'min', i.stock_min, 'max', i.stock_max, 'unidad', i.unidad, 'insumo_id', i.id) FROM insumos i WHERE i.id = p.insumo_id AND i.activo) AS existencia,
            coalesce((SELECT json_agg(json_build_object('id', g.id, 'nombre', g.nombre, 'obligatorio', g.obligatorio, 'multiple', g.multiple,
                'opciones', (SELECT coalesce(json_agg(json_build_object('id', o.id, 'nombre', o.nombre, 'precio_extra', o.precio_extra::bigint, 'zona_id', o.zona_id,
                'receta', (SELECT coalesce(json_agg(json_build_object('insumo_id', r.insumo_id, 'cantidad', r.cantidad)), '[]') FROM opcion_receta r WHERE r.opcion_id = o.id)) ORDER BY o.orden, o.id), '[]') FROM opciones o WHERE o.grupo_id = g.id)) ORDER BY g.orden, g.id)
@@ -198,11 +202,11 @@ export function montarV8({ app, q, pool, tx, auth, notify, audit, upload, guarda
         const nuevas = filas.filter((f) => !ids.has(f.nombre.toLowerCase()));
         if (nuevas.length) {
           const { rows } = await c.query(`
-            INSERT INTO platos (nombre, descripcion, precio, emoji, categoria, orden, es_promo, dias, agotado)
-            SELECT x.nombre, x.descripcion, x.precio, x.emoji, x.categoria, x.orden, x.es_promo, CASE WHEN x.dias = '' THEN NULL ELSE string_to_array(x.dias, ',')::smallint[] END, x.agotado
-            FROM json_to_recordset($1::json) AS x(nombre text, descripcion text, precio numeric, emoji text, categoria text, orden int, es_promo boolean, dias text, agotado boolean)
+            INSERT INTO platos (nombre, descripcion, precio, emoji, categoria, orden, es_promo, dias, agotado, tipo)
+            SELECT x.nombre, x.descripcion, x.precio, x.emoji, x.categoria, x.orden, x.es_promo, CASE WHEN x.dias = '' THEN NULL ELSE string_to_array(x.dias, ',')::smallint[] END, x.agotado, x.tipo
+            FROM json_to_recordset($1::json) AS x(nombre text, descripcion text, precio numeric, emoji text, categoria text, orden int, es_promo boolean, dias text, agotado boolean, tipo text)
             RETURNING id, lower(nombre) AS n`,
-            [JSON.stringify(nuevas.map((f) => ({ nombre: f.nombre, descripcion: f.desc || null, precio: f.precio ?? 0, agotado: f.precio == null, emoji: f.cat.emoji, categoria: f.cat.cat, orden: f.orden, es_promo: !!f.cat.promo, dias: (f.op.dias || []).join(',') })))]);
+            [JSON.stringify(nuevas.map((f) => ({ nombre: f.nombre, descripcion: f.desc || null, precio: f.precio ?? 0, agotado: f.precio == null, emoji: f.cat.emoji, categoria: f.cat.cat, orden: f.orden, es_promo: !!f.cat.promo, dias: (f.op.dias || []).join(','), tipo: !f.cat.promo && !(f.zs || []).length ? 'producto' : 'plato' })))]);
           for (const r of rows) ids.set(r.n, r.id);
           const pz = [], gr = [];
           for (const f of nuevas) {
@@ -228,6 +232,7 @@ export function montarV8({ app, q, pool, tx, auth, notify, audit, upload, guarda
         }
         if (cb.length) await c.query(`INSERT INTO plato_combo (promo_id, plato_id, cantidad) SELECT x.promo_id, x.plato_id, x.cantidad
           FROM json_to_recordset($1::json) AS x(promo_id int, plato_id int, cantidad int) ON CONFLICT DO NOTHING`, [JSON.stringify(cb)]);
+        await K.asegurarExistencias(c);   // cada producto de tienda con su existencia en el inventario
         return { creados: nuevas.length, existentes: filas.length - nuevas.length, sin_precio: nuevas.filter((f) => f.precio == null).length };
       });
       notify();
@@ -362,6 +367,8 @@ export function montarV8({ app, q, pool, tx, auth, notify, audit, upload, guarda
       const { rows: [k] } = await c.query(`INSERT INTO compras_inventario (fecha, insumo_id, presentacion, cant_presentacion, cantidad_base, costo_total, proveedor, pagado_con, usuario_id, turno_id)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`, [fecha, i.id, pres, pres ? cantidad : null, base, costo, proveedor, pagado, req.user.id, turno ? turno.id : null]);
       await c.query('UPDATE insumos SET cantidad = cantidad + $2, costo_unitario = $3 WHERE id = $1', [i.id, base, nuevoCosto]);
+      // Producto de tienda: su costo de compra en la carta sigue al costo promedio de las compras
+      await c.query(`UPDATE platos SET costo_fijo = $2 WHERE insumo_id = $1 AND tipo = 'producto' AND activo`, [i.id, nuevoCosto]);
       await c.query(`INSERT INTO movimientos_inventario (insumo_id, tipo, cantidad, delta, motivo, usuario_id, compra_id) VALUES ($1,'entrada',$2,$2,$3,$4,$5)`,
         [i.id, base, 'Compra' + (proveedor ? ' a ' + proveedor : ''), req.user.id, k.id]);
       if (Number(i.costo_unitario) !== nuevoCosto)

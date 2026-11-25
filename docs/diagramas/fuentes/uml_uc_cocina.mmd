@@ -1,0 +1,55 @@
+---
+config:
+  theme: base
+  themeVariables:
+    fontFamily: Arial
+    fontSize: 17px
+    primaryColor: "#fff2e3"
+    primaryBorderColor: "#c25a00"
+    lineColor: "#555"
+    edgeLabelBackground: "#ffffff"
+---
+flowchart LR
+  COC["👨‍🍳 Cocinero de zona<br/>(Asador / Cocina)"]
+  ADM["🧑‍💻 Administrador"]
+  IMP["🖨 Impresora o agente<br/>de comandas"]
+  subgraph S["Sistema Pinchos la 17"]
+    K1(["Ver tareas de su zona"])
+    K2(["Empezar a preparar"])
+    K3(["Marcar tarea o zona lista"])
+    K4(["Armar y despachar pedido"])
+    K6(["Imprimir comanda por zona"])
+    A1(["Gestionar carta, opciones<br/>y promociones"])
+    A2(["Gestionar inventario<br/>(insumos, compras, conteos)"])
+    A3(["Ver contabilidad<br/>(utilidad y flujo de caja)"])
+    A4(["Gestionar usuarios y 2FA"])
+    A5(["Configurar zonas, domicilios<br/>y forma de cocina"])
+    A6(["Cancelar pedido en<br/>preparación (con motivo)"])
+    A8(["Ver turnos, alertas<br/>y auditoría"])
+    A9(["Gestionar productos de tienda<br/>(costo de compra y precio)"])
+    A10(["Definir mínimos y máximos<br/>de stock"])
+    A11(["Generar pedido<br/>a proveedores"])
+    K5(["Descontar inventario<br/>(recetas + merma)"])
+    A7(["Registrar desperdicio"])
+  end
+  COC --- K1
+  COC --- K2
+  COC --- K3
+  COC --- K4
+  IMP --- K6
+  ADM --- A1
+  ADM --- A2
+  ADM --- A3
+  ADM --- A4
+  ADM --- A5
+  ADM --- A6
+  ADM --- A8
+  ADM --- A9
+  ADM --- A10
+  ADM --- A11
+  A11 -. "«include»" .-> A10
+  K2 -. "«include»" .-> K5
+  A6 -. "«include»" .-> A7
+  classDef act fill:#2a1f17,color:#fff,stroke:#2a1f17,font-weight:bold
+  class COC,ADM,IMP act
+  style S fill:#fffaf4,stroke:#c25a00,stroke-width:2px

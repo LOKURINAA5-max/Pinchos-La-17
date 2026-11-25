@@ -1,0 +1,42 @@
+---
+config:
+  theme: base
+  themeVariables:
+    fontFamily: Arial
+    fontSize: 17px
+    primaryColor: "#fff2e3"
+    primaryBorderColor: "#c25a00"
+    lineColor: "#555"
+    edgeLabelBackground: "#ffffff"
+---
+sequenceDiagram
+  autonumber
+  actor Cl as Cliente (celular)
+  participant W as Página web
+  participant S as Servidor (Node.js / Express)
+  participant D as PostgreSQL (Neon)
+  actor Ca as Cajero
+  actor Co as Cocina (tablet de zona)
+  Cl->>W: Escanea el QR de la mesa y arma su pedido
+  W->>S: POST /api/pedidos (productos, opciones)
+  S->>D: Valida disponibilidad y precios · INSERT pedidos, pedido_items
+  S-->>W: Pedido #N creado (sin confirmar)
+  S--)Ca: Aviso en tiempo real (SSE)
+  Ca->>S: PATCH /api/pedidos/:id/confirmar
+  S->>D: Crea pedido_tareas por zona
+  S--)Co: Aviso en tiempo real
+  Co->>S: PATCH /api/cocina/:id/zonas/:zona/empezar
+  S->>D: BEGIN · estado = preparacion · descuenta insumos (recetas + merma) · movimientos_inventario · COMMIT
+  Co->>S: PATCH /api/cocina/:id/zonas/:zona/listo (cada zona)
+  S->>D: Cuando todas las zonas terminan: estado = listo
+  S--)Ca: Pedido listo
+  Ca->>S: PATCH /api/pedidos/:id/entregar
+  Ca->>S: PATCH /api/pedidos/:id/pagar (dinero recibido)
+  rect rgb(255, 241, 220)
+    S->>D: BEGIN · SELECT … FOR UPDATE (bloquea el pedido)
+    S->>D: Verifica que no esté pagado · número consecutivo de factura
+    S->>D: INSERT facturas · UPDATE pedidos SET pagado, factura_id · COMMIT
+  end
+  S-->>Ca: Factura N.º X y vueltos
+  W->>S: GET /api/pedidos/:id/estado
+  S-->>Cl: Entregado y pagado

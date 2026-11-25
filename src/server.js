@@ -293,7 +293,7 @@ app.get('/api/menu', async (req, res) => res.json(await cacheado('menu', 5000, a
              FROM opcion_grupos g WHERE g.plato_id = p.id), '[]') AS grupos
     FROM platos p
     LEFT JOIN recetas r ON r.plato_id = p.id
-    LEFT JOIN insumos i ON i.id = r.insumo_id
+    LEFT JOIN insumos i ON i.id = r.insumo_id AND i.tipo = 'materia_prima'   -- la existencia de un producto no es un ingrediente
     WHERE p.activo
       AND (p.dias IS NULL OR cardinality(p.dias) = 0 OR extract(dow FROM now())::int = ANY(p.dias))
       AND (NOT p.es_promo OR ((p.promo_desde IS NULL OR p.promo_desde <= now()) AND (p.promo_hasta IS NULL OR p.promo_hasta >= now())))
@@ -488,7 +488,9 @@ app.patch('/api/pedidos/:id/pagar', auth('caja', 'admin'), async (req, res) => {
 
 /* ---------- Administrador: inventario ---------- */
 app.get('/api/insumos', auth('admin'), async (req, res) => {
-  res.json((await q('SELECT * FROM insumos WHERE activo ORDER BY nombre')).rows);
+  res.json((await q(`SELECT i.*, p.id AS plato_id, p.precio AS precio_venta, p.categoria, p.emoji, p.agotado
+    FROM insumos i LEFT JOIN LATERAL (SELECT * FROM platos x WHERE x.insumo_id = i.id AND x.activo ORDER BY x.id LIMIT 1) p ON TRUE
+    WHERE i.activo ORDER BY i.tipo, i.nombre`)).rows);
 });
 
 const num = (v, def = null) => (v === undefined || v === null || v === '' ? def : Number(v));
@@ -500,13 +502,14 @@ app.post('/api/insumos', auth('admin'), upload.single('foto'), async (req, res) 
   const merma = num(req.body.merma_pct, 0), peso = num(req.body.peso_unidad);
   if (!codigo || !nombre || !(cantidad >= 0) || !(costo >= 0)) throw bad('Código, nombre y cantidad válidos son obligatorios');
   if (!(merma >= 0 && merma < 90) || (peso !== null && !(peso > 0))) throw bad('Merma (0 a 89 %) o peso por unidad inválidos');
+  const T = TOPES(req.body);
   const foto = await guardarFoto(req);
   const c = await pool.connect();
   try {
     await c.query('BEGIN');
     const { rows: [i] } = await c.query(
-      'INSERT INTO insumos (codigo, nombre, cantidad, unidad, foto, costo_unitario, merma_pct, peso_unidad) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *',
-      [codigo, nombre, cantidad, unidad || 'u', foto, costo, merma, peso]);
+      'INSERT INTO insumos (codigo, nombre, cantidad, unidad, foto, costo_unitario, merma_pct, peso_unidad, stock_min, stock_max) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *',
+      [codigo, nombre, cantidad, unidad || 'u', foto, costo, merma, peso, T.min, T.max]);
     if (cantidad > 0) await c.query(
       `INSERT INTO movimientos_inventario (insumo_id, tipo, cantidad, delta, motivo, usuario_id)
        VALUES ($1,'entrada',$2,$2,'Stock inicial',$3)`, [i.id, cantidad, req.user.id]);
@@ -517,6 +520,7 @@ app.post('/api/insumos', auth('admin'), upload.single('foto'), async (req, res) 
 
 app.put('/api/insumos/:id', auth('admin'), upload.single('foto'), async (req, res) => {
   const { nombre, unidad } = req.body, costo = num(req.body.costo_unitario), merma = num(req.body.merma_pct), peso = req.body.peso_unidad === '' ? 0 : num(req.body.peso_unidad);
+  const tMin = req.body.stock_min !== undefined, tMax = req.body.stock_max !== undefined, T = TOPES({ stock_min: req.body.stock_min, stock_max: req.body.stock_max });
   if (costo !== null && !(costo >= 0)) throw bad('Costo inválido');
   if (merma !== null && !(merma >= 0 && merma < 90)) throw bad('La merma debe estar entre 0 y 89 %');
   if (peso !== null && !(peso >= 0)) throw bad('Peso por unidad inválido');
@@ -527,8 +531,14 @@ app.put('/api/insumos/:id', auth('admin'), upload.single('foto'), async (req, re
     const { rows: [n] } = await c.query(
       `UPDATE insumos SET nombre = coalesce($2, nombre), unidad = coalesce($3, unidad), foto = coalesce($4, foto),
           costo_unitario = coalesce($5, costo_unitario), merma_pct = coalesce($6, merma_pct),
-          peso_unidad = CASE WHEN $7::numeric IS NULL THEN peso_unidad WHEN $7::numeric = 0 THEN NULL ELSE $7::numeric END
-       WHERE id = $1 RETURNING *`, [req.params.id, nombre || null, unidad || null, foto, costo, merma, peso]);
+          peso_unidad = CASE WHEN $7::numeric IS NULL THEN peso_unidad WHEN $7::numeric = 0 THEN NULL ELSE $7::numeric END,
+          stock_min = CASE WHEN $8::boolean THEN $9::numeric ELSE stock_min END,
+          stock_max = CASE WHEN $10::boolean THEN $11::numeric ELSE stock_max END
+       WHERE id = $1 RETURNING *`, [req.params.id, nombre || null, unidad || null, foto, costo, merma, peso, tMin, T.min, tMax, T.max]);
+    if (n.stock_min != null && n.stock_max != null && Number(n.stock_max) < Number(n.stock_min)) throw bad('El máximo no puede ser menor que el mínimo');
+    if (tMin) await cambio(c, 'insumo', o.id, o.nombre, 'mínimo', o.stock_min ?? 'sin tope', n.stock_min ?? 'sin tope', req.user.id);
+    if (tMax) await cambio(c, 'insumo', o.id, o.nombre, 'máximo', o.stock_max ?? 'sin tope', n.stock_max ?? 'sin tope', req.user.id);
+    if (costo !== null && n.tipo === 'producto') await c.query(`UPDATE platos SET costo_fijo = $2 WHERE insumo_id = $1 AND tipo = 'producto' AND activo`, [o.id, costo]);
     if (costo !== null) await cambio(c, 'insumo', o.id, o.nombre, 'costo', Number(o.costo_unitario), Number(n.costo_unitario), req.user.id);
     if (merma !== null) await cambio(c, 'insumo', o.id, o.nombre, 'merma_pct', Number(o.merma_pct), Number(n.merma_pct), req.user.id);
     return n;
@@ -548,10 +558,11 @@ app.post('/api/insumos/:id/movimiento', auth('admin'), async (req, res) => {
   const c = await pool.connect();
   try {
     await c.query('BEGIN');
-    const { rows: [i] } = await c.query('SELECT cantidad FROM insumos WHERE id = $1 AND activo FOR UPDATE', [req.params.id]);
+    const { rows: [i] } = await c.query('SELECT cantidad, stock_min, nombre, unidad, tipo FROM insumos WHERE id = $1 AND activo FOR UPDATE', [req.params.id]);
     if (!i) throw new HttpError(404, 'Producto no encontrado');
     const delta = tipo === 'entrada' ? n : tipo === 'salida' ? -n : n - Number(i.cantidad);
     if (Number(i.cantidad) + delta < 0) throw bad('No hay suficiente stock');
+    await K.avisoMinimo(c, i, Number(i.cantidad) + delta);
     await c.query('UPDATE insumos SET cantidad = cantidad + $2 WHERE id = $1', [req.params.id, delta]);
     await c.query(
       `INSERT INTO movimientos_inventario (insumo_id, tipo, cantidad, delta, motivo, usuario_id) VALUES ($1,$2,$3,$4,$5,$6)`,
@@ -559,6 +570,20 @@ app.post('/api/insumos/:id/movimiento', auth('admin'), async (req, res) => {
     await c.query('COMMIT');
     res.json({ cantidad: Number(i.cantidad) + delta });
   } catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
+});
+
+// Lista de pedido a proveedores: lo que está en su mínimo o por debajo, y cuánto pedir para llegar al máximo
+app.get('/api/inventario/pedido', auth('admin'), async (req, res) => {
+  const { rows } = await q(`
+    SELECT i.id, i.codigo, i.nombre, i.tipo, i.unidad, i.cantidad, i.stock_min, i.stock_max, i.costo_unitario,
+           greatest(coalesce(i.stock_max, i.stock_min * 2) - i.cantidad, 0) AS pedir,
+           (SELECT json_agg(json_build_object('nombre', pr.nombre, 'cantidad_base', pr.cantidad_base) ORDER BY pr.cantidad_base DESC)
+              FROM presentaciones pr WHERE pr.insumo_id = i.id) AS presentaciones
+    FROM insumos i
+    WHERE i.activo AND i.stock_min IS NOT NULL AND i.cantidad <= i.stock_min
+    ORDER BY i.tipo, (i.cantidad / nullif(i.stock_min, 0)) NULLS FIRST, i.nombre`);
+  const { rows: [sin] } = await q(`SELECT count(*) FILTER (WHERE stock_min IS NULL)::int AS sin_topes, count(*)::int AS total FROM insumos WHERE activo`);
+  res.json({ items: rows, sin_topes: sin.sin_topes, total: sin.total });
 });
 
 app.get('/api/movimientos', auth('admin'), async (req, res) => {   // historial (RF-10)
@@ -587,21 +612,47 @@ async function guardarZonasCombo(c, platoId, zonas, combo) {
   }
 }
 const json = (v, def) => { try { return v ? JSON.parse(v) : def; } catch { throw bad('Datos inválidos'); } };
+// Tipo de producto y costo fijo. TIPO: undefined = no cambia. COSTO: undefined = no cambia, null = borrar el costo, número ≥ 0.
+const TIPO = (v) => { if (v === undefined || v === null || v === '') return undefined; if (!['plato', 'producto'].includes(v)) throw bad('Tipo inválido: plato o producto'); return v; };
+// Existencia inicial, mínimo y máximo (en la unidad del artículo). Vacío = sin tope.
+const TOPES = (b) => {
+  const n = (v, que) => { if (v === undefined || v === null || v === '') return null; const x = Number(v); if (!Number.isFinite(x) || x < 0 || x > 1e7) throw bad(`${que} inválido`); return Math.round(x * 100) / 100; };
+  const ini = n(b.stock_inicial, 'Stock inicial'), min = n(b.stock_min, 'Mínimo'), max = n(b.stock_max, 'Máximo');
+  if (max !== null && max === 0) throw bad('El máximo debe ser mayor que 0');
+  if (min !== null && max !== null && max < min) throw bad('El máximo no puede ser menor que el mínimo');
+  return { ini, min, max };
+};
+const COSTO = (v) => {
+  if (v === undefined) return undefined;
+  if (v === null || v === '') return null;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0 || n > 1e8) throw bad('El costo debe ser un valor en pesos mayor o igual a 0');
+  return Math.round(n * 100) / 100;
+};
 app.post('/api/platos', auth('admin'), upload.single('foto'), async (req, res) => {
   const { nombre, descripcion, emoji } = req.body, precio = Number(req.body.precio), categoria = String(req.body.categoria || 'General').trim().slice(0, 40) || 'General';
   const receta = json(req.body.receta, []), zonas = json(req.body.zonas, []), combo = json(req.body.combo, []), dias = DIAS(json(req.body.dias, undefined));
   const es_promo = req.body.es_promo === 'true' || req.body.es_promo === true;
   if (!nombre || !(precio >= 0)) throw bad('Nombre y precio válidos son obligatorios');
+  const tipo = es_promo ? 'plato' : TIPO(req.body.tipo) ?? 'plato', costo = COSTO(req.body.costo_fijo) ?? null;
   const foto = await guardarFoto(req);
   const p = await tx(async (c) => {
     const { rows: [p] } = await c.query(
-      `INSERT INTO platos (nombre, descripcion, precio, foto, emoji, categoria, es_promo, promo_desde, promo_hasta, dias)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      `INSERT INTO platos (nombre, descripcion, precio, foto, emoji, categoria, es_promo, promo_desde, promo_hasta, dias, tipo, costo_fijo)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
       [nombre, descripcion || null, precio, foto, emoji || '🍽️', es_promo ? 'Promociones' : categoria, es_promo,
-       FECHA_HORA(req.body.promo_desde) ?? null, FECHA_HORA(req.body.promo_hasta) ?? null, dias ?? null]);
+       FECHA_HORA(req.body.promo_desde) ?? null, FECHA_HORA(req.body.promo_hasta) ?? null, dias ?? null, tipo, costo]);
     for (const r of receta)
       await c.query('INSERT INTO recetas (plato_id, insumo_id, cantidad) VALUES ($1,$2,$3)', [p.id, Number(r.insumo_id), Number(r.cantidad)]);
     await guardarZonasCombo(c, p.id, zonas, combo);
+    if (tipo === 'producto' && !receta.length) {   // tienda: el producto tiene su propia existencia, con mínimo y máximo
+      const { ini, min, max } = TOPES(req.body);
+      const { rows: [i] } = await c.query(`INSERT INTO insumos (codigo, nombre, cantidad, unidad, costo_unitario, tipo, stock_min, stock_max)
+        VALUES ($1,$2,$3,'u',$4,'producto',$5,$6) RETURNING id`, ['PROD-' + p.id, String(nombre).slice(0, 80), ini ?? 0, costo ?? 0, min, max]);
+      await c.query('UPDATE platos SET insumo_id = $2 WHERE id = $1', [p.id, i.id]); p.insumo_id = i.id;
+      await c.query('INSERT INTO recetas (plato_id, insumo_id, cantidad) VALUES ($1,$2,1)', [p.id, i.id]);
+      if (ini > 0) await c.query(`INSERT INTO movimientos_inventario (insumo_id, tipo, cantidad, delta, motivo, usuario_id) VALUES ($1,'entrada',$2,$2,'Stock inicial',$3)`, [i.id, ini, req.user.id]);
+    }
     return p;
   });
   notify();
@@ -611,7 +662,7 @@ app.post('/api/platos', auth('admin'), upload.single('foto'), async (req, res) =
 app.put('/api/platos/:id', auth('admin'), async (req, res) => {
   const b = req.body || {};
   if (b.precio !== undefined && !(Number(b.precio) >= 0)) throw bad('Precio inválido');
-  const dias = DIAS(b.dias), desde = FECHA_HORA(b.promo_desde), hasta = FECHA_HORA(b.promo_hasta);
+  const dias = DIAS(b.dias), desde = FECHA_HORA(b.promo_desde), hasta = FECHA_HORA(b.promo_hasta), tipo = TIPO(b.tipo), costo = COSTO(b.costo_fijo);
   const p = await tx(async (c) => {
     const { rows: [o] } = await c.query('SELECT * FROM platos WHERE id = $1 AND activo FOR UPDATE', [req.params.id]);
     if (!o) throw new HttpError(404, 'Plato no encontrado');
@@ -621,17 +672,28 @@ app.put('/api/platos/:id', auth('admin'), async (req, res) => {
           dias = CASE WHEN $8::boolean THEN $9::smallint[] ELSE dias END,
           promo_desde = CASE WHEN $10::boolean THEN $11::timestamptz ELSE promo_desde END,
           promo_hasta = CASE WHEN $12::boolean THEN $13::timestamptz ELSE promo_hasta END,
-          orden = coalesce($14, orden)
+          orden = coalesce($14, orden),
+          tipo = CASE WHEN es_promo THEN 'plato' ELSE coalesce($15, tipo) END,
+          costo_fijo = CASE WHEN $16::boolean THEN $17::numeric ELSE costo_fijo END
        WHERE id = $1 RETURNING *`,
       [req.params.id, b.nombre ?? null, b.precio ?? null, typeof b.agotado === 'boolean' ? b.agotado : null,
        b.categoria ? String(b.categoria).trim().slice(0, 40) : null, b.descripcion ?? null, b.emoji ?? null,
-       dias !== undefined, dias ?? null, desde !== undefined, desde ?? null, hasta !== undefined, hasta ?? null, Number.isInteger(b.orden) ? b.orden : null]);
+       dias !== undefined, dias ?? null, desde !== undefined, desde ?? null, hasta !== undefined, hasta ?? null, Number.isInteger(b.orden) ? b.orden : null,
+       tipo ?? null, costo !== undefined, costo ?? null]);
     if (b.precio !== undefined) await cambio(c, 'plato', o.id, o.nombre, 'precio', Number(o.precio), Number(n.precio), req.user.id);
+    if (costo !== undefined && String(o.costo_fijo ?? '') !== String(n.costo_fijo ?? ''))
+      await c.query(`INSERT INTO cambios_precio (tipo, ref_id, nombre, campo, antes, despues, usuario_id) VALUES ('plato',$1,$2,'costo',$3,$4,$5)`,
+        [o.id, o.nombre, o.costo_fijo == null ? 'sin costo' : String(Number(o.costo_fijo)), n.costo_fijo == null ? 'sin costo' : String(Number(n.costo_fijo)), req.user.id]);
     // Producto cargado sin precio ($0 y agotado): al ponerle precio por primera vez queda disponible solo
     if (Number(o.precio) === 0 && o.agotado && Number(n.precio) > 0 && typeof b.agotado !== 'boolean') {
       await c.query('UPDATE platos SET agotado = FALSE WHERE id = $1', [o.id]); n.agotado = false;
     }
     await guardarZonasCombo(c, o.id, b.zonas, b.combo);
+    if (n.tipo === 'producto') {
+      await K.asegurarExistencias(c);
+      const { rows: [x] } = await c.query('SELECT insumo_id FROM platos WHERE id = $1', [o.id]); n.insumo_id = x.insumo_id;
+      if (costo != null && n.insumo_id) await c.query('UPDATE insumos SET costo_unitario = $2 WHERE id = $1', [n.insumo_id, costo]);   // costo de compra = costo del inventario
+    }
     return n;
   });
   notify();
@@ -662,7 +724,7 @@ const PAGADOS = 'pagado AND pagado_en::date BETWEEN $1 AND $2';
 
 app.get('/api/contabilidad/resumen', auth('admin'), async (req, res) => {
   const R = rango(req);
-  const [v, tipos, horas, dias, canc, gas, gcat, cost, top, tiempos, inv, invIns, domi] = await Promise.all([
+  const [v, tipos, horas, dias, canc, gas, gcat, cost, top, tiempos, inv, invIns, domi, fij] = await Promise.all([
     q(`SELECT count(*)::int AS pedidos, coalesce(sum(total),0)::bigint AS total,
          coalesce(sum(total) FILTER (WHERE metodo_pago = 'efectivo'),0)::bigint AS efectivo,
          coalesce(sum(total) FILTER (WHERE metodo_pago = 'nequi'),0)::bigint AS nequi FROM pedidos WHERE ${PAGADOS}`, R),
@@ -673,7 +735,7 @@ app.get('/api/contabilidad/resumen', auth('admin'), async (req, res) => {
     q(`SELECT count(*)::int AS pedidos, coalesce(sum(total),0)::bigint AS total FROM pedidos WHERE estado = 'cancelado' AND creado_en::date BETWEEN $1 AND $2`, R),
     q(`SELECT coalesce(sum(monto),0)::bigint AS total FROM gastos WHERE NOT anulado AND fecha BETWEEN $1 AND $2`, R),
     q(`SELECT categoria, sum(monto)::bigint AS total FROM gastos WHERE NOT anulado AND fecha BETWEEN $1 AND $2 GROUP BY 1 ORDER BY 2 DESC`, R),
-    q(`SELECT coalesce(sum(m.cantidad * i.costo_unitario) FILTER (WHERE m.pedido_id IS NOT NULL AND pe.estado <> 'cancelado'),0)::bigint AS costo_ventas,
+    q(`SELECT coalesce(sum(m.cantidad * i.costo_unitario) FILTER (WHERE m.pedido_id IS NOT NULL AND pe.estado <> 'cancelado' AND NOT m.costo_aparte),0)::bigint AS costo_ventas,
               coalesce(sum(m.cantidad * i.costo_unitario) FILTER (WHERE m.pedido_id IS NULL OR pe.estado = 'cancelado'),0)::bigint AS mermas
        FROM movimientos_inventario m JOIN insumos i ON i.id = m.insumo_id LEFT JOIN pedidos pe ON pe.id = m.pedido_id
        WHERE m.tipo = 'salida' AND m.creado_en::date BETWEEN $1 AND $2`, R),
@@ -688,13 +750,16 @@ app.get('/api/contabilidad/resumen', auth('admin'), async (req, res) => {
     q(`SELECT i.nombre, sum(c.costo_total)::bigint AS total FROM compras_inventario c JOIN insumos i ON i.id = c.insumo_id
        WHERE NOT c.anulada AND c.fecha BETWEEN $1 AND $2 GROUP BY 1 ORDER BY 2 DESC`, R),
     q(`SELECT coalesce(sum(costo_domicilio),0)::bigint AS total, count(*) FILTER (WHERE costo_domicilio > 0)::int AS pedidos FROM pedidos WHERE ${PAGADOS}`, R),
+    q(`SELECT coalesce(round(sum(it.costo_fijo * it.cantidad)),0)::bigint AS total FROM pedido_items it JOIN pedidos p ON p.id = it.pedido_id
+       WHERE ${PAGADOS.replaceAll('pagado', 'p.pagado')} AND p.estado <> 'cancelado' AND it.costo_fijo IS NOT NULL`, R),
   ]);
-  const ventas = v.rows[0], c = cost.rows[0], gastos = Number(gas.rows[0].total);
+  const ventas = v.rows[0], c = cost.rows[0], gastos = Number(gas.rows[0].total), fijos = Number(fij.rows[0].total);
+  c.costo_receta = Number(c.costo_ventas); c.costo_ventas = Number(c.costo_ventas) + fijos;   // por receta + costos fijos (productos y costo de producción manual)
   const bruta = Number(ventas.total) - Number(c.costo_ventas);
   res.json({
     desde: R[0], hasta: R[1], ventas, ticket_promedio: ventas.pedidos ? Math.round(Number(ventas.total) / ventas.pedidos) : 0,
     por_tipo: tipos.rows, por_hora: horas.rows, por_dia: dias.rows, cancelados: canc.rows[0],
-    gastos: { total: gastos, por_categoria: gcat.rows }, costo_ventas: Number(c.costo_ventas), mermas: Number(c.mermas),
+    gastos: { total: gastos, por_categoria: gcat.rows }, costo_ventas: Number(c.costo_ventas), costo_detalle: { receta: c.costo_receta, fijo: fijos }, mermas: Number(c.mermas),
     utilidad_bruta: bruta, utilidad_neta: bruta - Number(c.mermas) - gastos, top_platos: top.rows, tiempos: tiempos.rows[0],
     // Compras de inventario: gasto de inversión. No entra a la utilidad (el costo de lo vendido ya la descuenta); sí al flujo de caja.
     inversion: { total: Number(inv.rows[0].total), por_insumo: invIns.rows },
@@ -726,18 +791,26 @@ app.get('/api/contabilidad/serie', auth('admin'), async (req, res) => {
 });
 
 app.get('/api/contabilidad/margenes', auth('admin'), async (req, res) => {
+  const modo = await K.modoCosto(pool);
+  // Costo de cada plato según su regla: producto → costo de compra; plato → receta, o costo de producción si el ajuste es manual.
   const { rows } = await q(`
-    WITH cp AS (
+    WITH rc AS (
       SELECT p.id, coalesce(sum(r.cantidad / (1 - i.merma_pct / 100.0) * i.costo_unitario), 0) AS costo, count(r.insumo_id)::int AS n
-      FROM platos p LEFT JOIN recetas r ON r.plato_id = p.id LEFT JOIN insumos i ON i.id = r.insumo_id GROUP BY p.id)
-    SELECT p.id, p.nombre, p.categoria, p.precio::bigint AS precio,
-           (cp.costo + coalesce(sum(cb.cantidad * cc.costo), 0))::bigint AS costo,
-           (p.precio - cp.costo - coalesce(sum(cb.cantidad * cc.costo), 0))::bigint AS margen,
-           (cp.n + coalesce(sum(cc.n), 0))::int AS ingredientes
+      FROM platos p LEFT JOIN recetas r ON r.plato_id = p.id LEFT JOIN insumos i ON i.id = r.insumo_id GROUP BY p.id),
+    cp AS (
+      SELECT p.id,
+             CASE WHEN p.costo_fijo IS NOT NULL AND (p.tipo = 'producto' OR $1 = 'manual') THEN p.costo_fijo ELSE rc.costo END AS costo,
+             CASE WHEN p.costo_fijo IS NOT NULL AND (p.tipo = 'producto' OR $1 = 'manual') THEN 'fijo' WHEN rc.n > 0 AND (p.tipo <> 'producto' OR rc.costo > 0) THEN 'receta' ELSE 'sin' END AS fuente
+      FROM platos p JOIN rc ON rc.id = p.id)
+    SELECT p.id, p.nombre, p.categoria, p.tipo, p.precio::bigint AS precio,
+           CASE WHEN count(cb.plato_id) > 0 THEN sum(cb.cantidad * cc.costo) ELSE min(cp.costo) END::bigint AS costo,
+           (p.precio - CASE WHEN count(cb.plato_id) > 0 THEN sum(cb.cantidad * cc.costo) ELSE min(cp.costo) END)::bigint AS margen,
+           CASE WHEN count(cb.plato_id) > 0 THEN CASE WHEN bool_and(cc.fuente = 'sin') THEN 'sin' WHEN bool_and(cc.fuente = 'fijo') THEN 'fijo' ELSE 'componentes' END
+                ELSE min(cp.fuente) END AS fuente
     FROM platos p JOIN cp ON cp.id = p.id
     LEFT JOIN plato_combo cb ON cb.promo_id = p.id LEFT JOIN cp cc ON cc.id = cb.plato_id
-    WHERE p.activo GROUP BY p.id, cp.costo, cp.n ORDER BY p.categoria, p.nombre`);
-  res.json(rows);
+    WHERE p.activo GROUP BY p.id ORDER BY p.categoria, p.nombre`, [modo]);
+  res.json({ modo, platos: rows });
 });
 
 app.get('/api/gastos', auth('admin'), async (req, res) => {
@@ -874,6 +947,8 @@ app.get('/api/platos/:id/receta', auth('admin'), async (req, res) =>
   res.json((await q('SELECT insumo_id, cantidad FROM recetas WHERE plato_id = $1', [req.params.id])).rows));
 app.delete('/api/platos/:id', auth('admin'), async (req, res) => {   // borrado lógico: conserva los pedidos antiguos
   await q('UPDATE platos SET activo = FALSE WHERE id = $1', [req.params.id]);
+  await q(`UPDATE insumos i SET activo = FALSE FROM platos p WHERE p.id = $1 AND p.tipo = 'producto' AND i.id = p.insumo_id AND i.tipo = 'producto'
+    AND NOT EXISTS (SELECT 1 FROM platos o WHERE o.insumo_id = i.id AND o.activo)`, [req.params.id]);
   notify();
   res.status(204).end();
 });

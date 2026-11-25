@@ -1,0 +1,130 @@
+---
+config:
+  theme: base
+  themeVariables:
+    fontFamily: Arial
+    fontSize: 16px
+    primaryColor: "#fff2e3"
+    primaryBorderColor: "#c25a00"
+    lineColor: "#444"
+  htmlLabels: false
+  themeCSS: "g.edgeTerminals text, .edgeTerminals text tspan { font-size: 15px !important; font-weight: bold; fill: #8c1d12 !important; }"
+  class:
+    hideEmptyMembersBox: true
+---
+classDiagram
+  direction LR
+  class Insumo {
+    +int id
+    +String codigo
+    +String nombre
+    +decimal cantidad
+    +Unidad unidad
+    +decimal costoUnitario
+    +decimal mermaPct
+    +decimal pesoUnidad
+    +TipoInsumo tipo
+    +decimal stockMin
+    +decimal stockMax
+    +bajoMinimo() boolean
+    +cantidadAPedir() decimal
+    +registrarMovimiento(tipo, cantidad)
+    +conteoFisico(cantidadReal)
+    +descontar(cantidad)
+  }
+  class Presentacion {
+    +int id
+    +String nombre
+    +decimal cantidadBase
+  }
+  class CompraInventario {
+    +int id
+    +Date fecha
+    +decimal cantidadBase
+    +decimal costoTotal
+    +String proveedor
+    +boolean anulada
+    +registrar() 
+    +anular()
+  }
+  class MovimientoInventario {
+    +long id
+    +TipoMovInv tipo
+    +decimal cantidad
+    +decimal delta
+    +String motivo
+  }
+  class Receta {
+    +decimal cantidad
+  }
+  class OpcionReceta {
+    +decimal cantidad
+  }
+  class Plato {
+    +int id
+    +String nombre
+    +TipoItem tipo
+    +decimal costoFijo
+  }
+  class Opcion {
+    +int id
+    +String nombre
+  }
+  class Pedido {
+    +UUID id
+    +descontarInventario()
+  }
+  class Usuario {
+    +int id
+    +String usuario
+  }
+  class Acceso {
+    +long id
+    +String ip
+    +boolean exito
+    +String motivo
+  }
+  class AuditoriaCaja {
+    +long id
+    +String evento
+    +JSON detalle
+  }
+  class CambioPrecio {
+    +long id
+    +String tipo
+    +String campo
+    +String antes
+    +String despues
+  }
+  class Unidad { <<enumeration>>
+    g
+    ml
+    u }
+  Insumo "1" *-- "0..*" Presentacion : viene en
+  Insumo "1" -- "0..*" CompraInventario : se compra
+  Insumo "1" -- "0..*" MovimientoInventario : mueve
+  CompraInventario "0..1" -- "0..*" MovimientoInventario : ingresa
+  Pedido "0..1" -- "0..*" MovimientoInventario : descuenta
+  Plato "1" -- "0..*" Receta : lleva
+  Receta "0..*" -- "1" Insumo : usa
+  Plato "0..*" --> "0..1" Insumo : existencia (producto de tienda)
+  Opcion "1" -- "0..*" OpcionReceta : consume
+  OpcionReceta "0..*" -- "1" Insumo : usa
+  Usuario "0..1" -- "0..*" MovimientoInventario : registra
+  Usuario "0..1" -- "0..*" Acceso : intenta entrar
+  Usuario "0..1" -- "0..*" AuditoriaCaja : hace
+  Usuario "0..1" -- "0..*" CambioPrecio : cambia
+  Insumo ..> Unidad
+  style Insumo fill:#d6f0dc,stroke:#2e7d4f,stroke-width:2px
+  style Presentacion fill:#d6f0dc,stroke:#2e7d4f
+  style CompraInventario fill:#d6f0dc,stroke:#2e7d4f
+  style MovimientoInventario fill:#d6f0dc,stroke:#2e7d4f,stroke-width:2px
+  style Receta fill:#d6f0dc,stroke:#2e7d4f
+  style OpcionReceta fill:#d6f0dc,stroke:#2e7d4f
+  style Acceso fill:#dbe6ff,stroke:#2f5fb3
+  style AuditoriaCaja fill:#dbe6ff,stroke:#2f5fb3
+  style CambioPrecio fill:#dbe6ff,stroke:#2f5fb3
+  style Usuario fill:#dbe6ff,stroke:#2f5fb3
+  style Plato fill:#eeeeee,stroke:#999
+  style Opcion fill:#eeeeee,stroke:#999
+  style Pedido fill:#eeeeee,stroke:#999

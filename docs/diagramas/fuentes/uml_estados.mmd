@@ -1,0 +1,38 @@
+---
+config:
+  theme: base
+  themeVariables:
+    fontFamily: Arial
+    fontSize: 19px
+    primaryColor: "#fff2e3"
+    primaryBorderColor: "#c25a00"
+    lineColor: "#555"
+    edgeLabelBackground: "#ffffff"
+---
+stateDiagram-v2
+  direction TB
+  [*] --> SinConfirmar : cliente pide por QR
+  [*] --> Espera : caja toma el pedido
+  SinConfirmar --> Espera : caja confirma
+  SinConfirmar --> Cancelado : caja rechaza
+  Espera --> Espera : se corrigen productos
+  Espera --> Preparacion : una zona empieza<br/>[se descuenta inventario]
+  Espera --> Cancelado : caja cancela (sin costo)
+  state Preparacion {
+    direction LR
+    [*] --> ZonasTrabajando
+    ZonasTrabajando --> ZonasListas : todas las zonas terminan
+    ZonasListas --> ZonasTrabajando : una zona reabre
+  }
+  Preparacion --> Listo : armado / despacho<br/>(o automático si no hay paso de despacho)
+  Preparacion --> Cancelado : administrador con motivo<br/>[queda como desperdicio]
+  Listo --> Entregando : sale el domicilio
+  Listo --> Entregado : se entrega en mesa o mostrador
+  Entregando --> Entregado : llega al cliente
+  Entregado --> [*]
+  Cancelado --> [*]
+  note right of Listo
+    El cobro (factura) es independiente del estado:
+    se puede cobrar antes o después de entregar.
+    Un pedido tiene como máximo una factura.
+  end note

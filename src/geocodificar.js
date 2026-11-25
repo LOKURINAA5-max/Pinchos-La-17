@@ -8,6 +8,27 @@ const MUNICIPIOS = {
 };
 export const municipios = Object.keys(MUNICIPIOS);
 const CAJA = { izq: -73.25, arr: 7.20, der: -72.98, aba: 6.93 };   // área metropolitana de Bucaramanga
+// Recuadro aproximado de cada municipio (con margen). Sirve para no confundir calles con el mismo número en otro municipio:
+// la «Calle 4B con Carrera 20» existe en Bucaramanga y en Girón, y antes se podía tomar la de Bucaramanga.
+const ZONA = {
+  Bucaramanga: { izq: -73.165, arr: 7.175, der: -73.065, aba: 7.045 },
+  Floridablanca: { izq: -73.125, arr: 7.105, der: -73.025, aba: 7.015 },
+  'Girón': { izq: -73.235, arr: 7.125, der: -73.125, aba: 6.995 },
+  Piedecuesta: { izq: -73.105, arr: 7.035, der: -72.995, aba: 6.925 },
+};
+// Cómo aparece cada municipio en OpenStreetMap (Girón figura como «San Juan de Girón»)
+const NOMBRES_OSM = { Bucaramanga: ['Bucaramanga'], Floridablanca: ['Floridablanca'], 'Girón': ['Girón', 'San Juan de Girón'], Piedecuesta: ['Piedecuesta'] };
+// Si la dirección trae el municipio escrito («Cl. 4b # 20-19 Girón, Santander») se usa ese y se quita del texto
+const EN_TEXTO = [[/\b(?:san\s+juan\s+de\s+)?gir[oó]n\b/i, 'Girón'], [/\bfloridablanca\b/i, 'Floridablanca'], [/\bpiedecuesta\b/i, 'Piedecuesta'], [/\bbucaramanga\b/i, 'Bucaramanga']];
+export function separarMunicipio(txt) {
+  let dir = String(txt || ''), mun = null;
+  for (const [re, m] of EN_TEXTO) if (re.test(dir)) { mun = m; dir = dir.replace(re, ' '); break; }
+  dir = dir.replace(/,?\s*\b(santander|colombia)\b\.?/gi, ' ').replace(/[,\s]+$/g, '').replace(/^[,\s]+/, '').replace(/\s+/g, ' ').trim();
+  return { dir, mun };
+}
+const enZona = (mun, lat, lng) => { const z = ZONA[mun]; return !z || (lat <= z.arr && lat >= z.aba && lng >= z.izq && lng <= z.der); };
+// «4B» se escribe en OSM como «4B» o «4 B»
+const variantes = (tipo, num) => { const m = String(num).match(/^(\d+)([A-Z])$/); return m ? [`${tipo} ${num}`, `${tipo} ${m[1]} ${m[2]}`] : [`${tipo} ${num}`]; };
 const BASE = (process.env.GEOCODER_URL || 'https://nominatim.openstreetmap.org').replace(/\/+$/, '');
 const AGENTE = 'Pinchos17-Pedidos/1.0 (sistema de pedidos de un restaurante en Bucaramanga)' + (process.env.NOMINATIM_EMAIL ? ' ' + process.env.NOMINATIM_EMAIL : '');
 
@@ -29,14 +50,14 @@ const otraVia = (tipo) => (tipo === 'Calle' ? ['Carrera'] : tipo === 'Carrera' ?
 // Nominatim permite como máximo 1 consulta por segundo: se ponen en fila. Los resultados se guardan 7 días.
 let fila = Promise.resolve();
 const memoria = new Map();
-function nominatim(params) {
-  const clave = JSON.stringify(params);
+function nominatim(params, zona = CAJA) {
+  const clave = JSON.stringify([params, zona]);
   const m = memoria.get(clave);
   if (m && Date.now() - m.t < 7 * 864e5) return Promise.resolve(m.v);
   const p = fila.then(async () => {
     const u = new URL(BASE + '/search');
     Object.entries({ format: 'jsonv2', countrycodes: 'co', 'accept-language': 'es', limit: 10, bounded: 1,
-      viewbox: `${CAJA.izq},${CAJA.arr},${CAJA.der},${CAJA.aba}`, ...params }).forEach(([k, v]) => u.searchParams.set(k, v));
+      viewbox: `${zona.izq},${zona.arr},${zona.der},${zona.aba}`, ...params }).forEach(([k, v]) => u.searchParams.set(k, v));
     const r = await fetch(u, { headers: { 'User-Agent': AGENTE, Accept: 'application/json' }, signal: AbortSignal.timeout(8000) });
     if (!r.ok) throw new Error('El buscador de direcciones respondió ' + r.status);
     const v = await r.json();
@@ -93,38 +114,57 @@ async function conGoogle(dir, mun) {
     precision: tipo === 'ROOFTOP' || tipo === 'RANGE_INTERPOLATED' ? 'exacta' : 'aproximada' };
 }
 
-// Devuelve { encontrado, lat, lng, precision: 'exacta'|'cruce'|'calle'|'barrio'|'municipio', etiqueta, centro }
-export async function buscar(dir, mun = 'Bucaramanga', barrio = '') {
-  if (!MUNICIPIOS[mun]) mun = 'Bucaramanga';
-  const centro = MUNICIPIOS[mun];
-  dir = String(dir || '').trim().slice(0, 200);
+// Busca una calle en el municipio: primero con el nombre del municipio (cada nombre con que figura en OSM),
+// y si no aparece, solo la calle dentro del recuadro del municipio.
+async function calleEn(via, mun) {
+  const z = ZONA[mun] || CAJA, out = [];
+  for (const nombre of variantes(...via)) {
+    for (const city of NOMBRES_OSM[mun] || [mun]) {
+      const r = (await nominatim({ street: nombre, city, polygon_geojson: 1 }, z)).filter((x) => enZona(mun, +x.lat, +x.lon));
+      out.push(...r); if (out.length) return out;
+    }
+    const r = (await nominatim({ street: nombre, polygon_geojson: 1 }, z)).filter((x) => enZona(mun, +x.lat, +x.lon));
+    out.push(...r); if (out.length) return out;
+  }
+  return out;
+}
+const esVia = (x) => /highway/.test(x.category || x.class || '') || x.geojson?.type?.includes('Line');
+
+// Devuelve { encontrado, lat, lng, precision: 'exacta'|'cruce'|'calle'|'barrio'|'municipio', etiqueta, centro, municipio }
+export async function buscar(dirTexto, munElegido = 'Bucaramanga', barrio = '') {
+  const sep = separarMunicipio(String(dirTexto || '').slice(0, 200));
+  let mun = sep.mun || (MUNICIPIOS[munElegido] ? munElegido : 'Bucaramanga');   // lo escrito en la dirección manda
+  const centro = MUNICIPIOS[mun], dir = sep.dir, Z = ZONA[mun];
+  const fin = (r) => ({ ...r, centro, municipio: mun });
   if (process.env.GOOGLE_GEOCODING_KEY) {
-    try { const g = await conGoogle(dir, mun); if (g) return { encontrado: true, ...g, centro }; } catch (e) { console.warn('[geocodificar] Google:', e.message); }
+    try { const g = await conGoogle(dir, mun); if (g && enZona(mun, g.lat, g.lng)) return fin({ encontrado: true, ...g }); } catch (e) { console.warn('[geocodificar] Google:', e.message); }
   }
   const a = analizar(dir);
   if (a) {
     const via = `${a.tipo} ${a.num}`;
-    const r1 = await nominatim({ street: via, city: mun, polygon_geojson: 1 });
-    const L1 = lineas(r1.filter((x) => /highway/.test(x.category || x.class || '') || x.geojson?.type?.includes('Line')));
+    const r1 = (await calleEn([a.tipo, a.num], mun)).filter(esVia);
+    const L1 = lineas(r1);
     if (L1.length) {
       for (const otra of otraVia(a.tipo)) {
-        const r2 = await nominatim({ street: `${otra} ${a.cruce}`, city: mun, polygon_geojson: 1 });
-        const p = cruce(L1, lineas(r2));
-        if (p && enCaja(p.lat, p.lng)) return { encontrado: true, lat: red(p.lat), lng: red(p.lng), precision: 'cruce', etiqueta: `${via} con ${otra} ${a.cruce}, ${mun}`, centro };
+        const p = cruce(L1, lineas(await calleEn([otra, a.cruce], mun)));
+        if (p && enZona(mun, p.lat, p.lng)) return fin({ encontrado: true, lat: red(p.lat), lng: red(p.lng), precision: 'cruce', etiqueta: `${via} con ${otra} ${a.cruce}, ${mun}` });
       }
       const x = r1[0];
-      if (x && enCaja(+x.lat, +x.lon)) return { encontrado: true, lat: red(x.lat), lng: red(x.lon), precision: 'calle', etiqueta: `${via}, ${mun}`, centro };
+      if (x) return fin({ encontrado: true, lat: red(x.lat), lng: red(x.lon), precision: 'calle', etiqueta: `${via}, ${mun}` });
     }
   }
   if (dir) {
-    const r = await nominatim({ q: `${dir}, ${mun}, Santander` });
-    const x = r.find((y) => enCaja(+y.lat, +y.lon));
-    if (x) return { encontrado: true, lat: red(x.lat), lng: red(x.lon), precision: x.category === 'building' || x.type === 'house' ? 'exacta' : 'aproximada', etiqueta: x.display_name, centro };
+    const texto = a ? `${a.tipo} ${a.num} # ${a.cruce}${a.placa ? '-' + a.placa : ''}` : dir;
+    for (const city of NOMBRES_OSM[mun] || [mun]) {
+      const r = await nominatim({ q: `${texto}, ${city}, Santander` }, Z);
+      const x = r.find((y) => enZona(mun, +y.lat, +y.lon));
+      if (x) return fin({ encontrado: true, lat: red(x.lat), lng: red(x.lon), precision: x.category === 'building' || x.type === 'house' ? 'exacta' : 'aproximada', etiqueta: x.display_name });
+    }
   }
   if (barrio && String(barrio).trim().length > 2) {
-    const r = await nominatim({ q: `${String(barrio).slice(0, 80)}, ${mun}, Santander` });
-    const x = r.find((y) => enCaja(+y.lat, +y.lon));
-    if (x) return { encontrado: true, lat: red(x.lat), lng: red(x.lon), precision: 'barrio', etiqueta: x.display_name, centro };
+    const r = await nominatim({ q: `${String(barrio).slice(0, 80)}, ${mun}, Santander` }, Z);
+    const x = r.find((y) => enZona(mun, +y.lat, +y.lon));
+    if (x) return fin({ encontrado: true, lat: red(x.lat), lng: red(x.lon), precision: 'barrio', etiqueta: x.display_name });
   }
-  return { encontrado: false, precision: 'municipio', centro, etiqueta: mun };
+  return fin({ encontrado: false, precision: 'municipio', etiqueta: mun });
 }

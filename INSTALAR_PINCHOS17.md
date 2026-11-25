@@ -65,3 +65,39 @@ Después del primer ingreso **borra `ADMIN_CLAVE`** en Render.
 ## Reutilizar el proyecto de Neon de Fercho (en vez de crear uno nuevo)
 Usa `db/convertir-a-pinchos17.sql`: borra todos los datos de Fercho (carta, usuarios, pedidos, facturas, inventario)
 y deja la base lista para Pinchos la 17. Las instrucciones y el orden de los pasos están al inicio del archivo.
+
+## Versión 1.2 · Direcciones de Girón y costos fijos
+**Direcciones en el mapa (Girón y demás municipios)**
+- Si la dirección trae el municipio escrito («Cl. 4b # 20-19 Girón, Santander»), se usa ese municipio aunque el selector
+  diga Bucaramanga, y el selector se corrige solo. Antes buscaba la misma calle en Bucaramanga.
+- Busca Girón también como «San Juan de Girón» (así figura en OpenStreetMap), y las calles con letra como «4B» y «4 B».
+- Solo acepta resultados dentro del municipio, para no confundir calles con el mismo número en otro municipio.
+- Los enlaces de Waze y Google Maps ya no repiten «Santander».
+
+**Productos con costo de compra y costo de producción manual**
+- Cada producto de la carta es **Plato** (se prepara: su costo sale de la receta) o **Producto** (se compra hecho y se vende
+  igual: gaseosas, cervezas…). Los productos tienen **costo de compra**; la Carta muestra costo y ganancia de cada uno.
+- **Ajustes → Costo de los platos**: «Calculado por las recetas» (como antes) o «Lo escribe el dueño» (costo de producción
+  por plato; los que no lo tengan siguen usando su receta).
+- El inventario se sigue descontando por las recetas igual que antes; el costo no se cuenta dos veces.
+- Cambiar el ajuste no altera las ventas ya hechas: cada venta guarda el costo con que se vendió.
+- Al actualizar se aplica sola la migración 14: las bebidas (lo que no pasa por cocina) quedan como «Producto».
+  Solo falta escribirles el costo de compra en Carta → Editar.
+
+## Versión 1.3 · Tienda: productos con existencias, mínimos, máximos y pedido a proveedores
+- **Carta dividida en dos:** «🍳 Platos» (se preparan en cocina, con receta) y «🥤 Productos de tienda» (se compran hechos
+  y se venden igual). Cada parte tiene su botón: **Nuevo plato** y **Nuevo producto de tienda**.
+- **Cada producto de tienda tiene su propia existencia**, que baja 1 unidad con cada venta. Al crearlo se le pone precio de
+  venta, costo de compra, existencia inicial, mínimo y máximo.
+- **Inventario dividido:** «Materias primas», «Productos (tienda)» y «🛒 Pedido a proveedores».
+- **Mínimo y máximo** para materias primas y productos. Al llegar al mínimo:
+  - el dueño recibe un aviso (una vez, al cruzar el mínimo);
+  - el artículo aparece en **Pedido a proveedores** con la cantidad para llegar al máximo (si no tiene máximo, hasta el doble
+    del mínimo), su equivalente en presentaciones (ej.: «≈ 3 × Paquete 5 kg») y el costo estimado;
+  - la lista se puede **copiar** (para WhatsApp) o **imprimir** en la impresora de la caja.
+- Las compras de un producto actualizan solas su costo de compra (promedio).
+- **El cliente no ve nada de esto:** ni existencias, ni mínimos, ni máximos, ni costos. Tampoco ve la existencia de un
+  producto como «ingrediente».
+- Al actualizar se aplica sola la migración 15: cada producto de tienda recibe su existencia (empieza en 0). Hay que
+  registrar el conteo inicial o la primera compra de cada uno, y ponerles mínimo y máximo.
+- Los productos con sabores (ej.: «Gaseosa personal 350 ml» con 5 sabores) comparten una sola existencia para todos sus sabores.

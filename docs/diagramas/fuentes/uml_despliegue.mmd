@@ -1,0 +1,47 @@
+---
+config:
+  theme: base
+  themeVariables:
+    fontFamily: Arial
+    fontSize: 17px
+    primaryColor: "#fff2e3"
+    primaryBorderColor: "#c25a00"
+    lineColor: "#555"
+    edgeLabelBackground: "#ffffff"
+---
+flowchart LR
+  subgraph LOCAL["🏪 Local Pinchos la 17"]
+    direction TB
+    CEL["📱 Celulares de clientes<br/>(navegador · QR de la mesa)"]
+    CAJA["💻 PC de caja<br/>(navegador)"]
+    TAB["📟 Tablets de cocina<br/>Asador · Cocina"]
+    PRN["🖨 Impresoras térmicas por zona<br/>(cable USB o WiFi)"]
+    AGE["⚙ Agente de impresión<br/>impresion/agente.mjs (opcional)"]
+    AGE -- "ESC/POS · WiFi (IP:9100) o USB" --> PRN
+  end
+  subgraph NUBE["☁ Nube"]
+    direction TB
+    subgraph RENDER["Render · servicio web"]
+      APP["Node.js 22 + Express 5<br/>API REST /api/* · eventos SSE<br/>página web (public/)"]
+    end
+    subgraph NEON["Neon · base de datos"]
+      DB[("PostgreSQL<br/>27 tablas · 44 claves foráneas")]
+    end
+    GH["GitHub<br/>(código fuente)"]
+  end
+  subgraph EXT["Servicios externos"]
+    OSM["OpenStreetMap<br/>mapa y búsqueda de direcciones"]
+    WAZE["Waze / Google Maps<br/>(navegación del domiciliario)"]
+  end
+  CEL -- "HTTPS" --> APP
+  CAJA -- "HTTPS + SSE" --> APP
+  TAB -- "HTTPS + SSE" --> APP
+  AGE -- "HTTPS (token)" --> APP
+  APP -- "TLS · pg" --> DB
+  GH -- "despliegue automático" --> APP
+  APP -- "búsqueda de direcciones" --> OSM
+  CEL -. "imágenes del mapa" .-> OSM
+  CAJA -. "enlace de navegación" .-> WAZE
+  style LOCAL fill:#fffaf4,stroke:#c25a00,stroke-width:2px
+  style NUBE fill:#f3f7ff,stroke:#2f5fb3,stroke-width:2px
+  style EXT fill:#f4fbf6,stroke:#2e7d4f,stroke-width:2px
